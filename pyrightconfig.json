@@ -1,0 +1,5 @@
+{
+  "venvPath": "/opt/homebrew/Caskroom/miniforge/base/envs/",
+  "venv": "llm_arc",
+  "pythonVersion": "3.11.9"
+}
