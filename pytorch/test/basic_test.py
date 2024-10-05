@@ -66,6 +66,7 @@ def test_decoder_only_transformer():
         attention_dropout_p=0,
         residual_dropout_p=0
     )
+    dec_only_transformer_module = torch.compile(dec_only_transformer_module)
     # batch size of 5, seq len of 3
     example_input = torch.randint(low=0, high=12, size=(5, 3))
     test_output = dec_only_transformer_module(example_input)
