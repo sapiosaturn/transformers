@@ -64,6 +64,7 @@ class MultiHeadAttention(nn.Module):
         # causal mask since we're doing decoder-only transformers
         attention_scores = attention_scores.masked_fill(self.causal_mask[:, :, :seq_length, :seq_length] == 0, float('-inf'))
         # TODO: wasn't there a sigmoid attention paper recently? try that as well instead of softmax
+        # also try diff transformers
         attention_scores = F.softmax(attention_scores, dim=-1)
         attention_scores = self.attention_dropout(attention_scores)
         # attention_scores * V
@@ -154,8 +155,7 @@ class DecoderOnlyTransformer(nn.Module):
         for layer in self.decoder_stack:
             output = layer(output)
         output = self.final_linear(output)
-        # for output probabilities
-        output = F.softmax(output, dim=-1)
+        # return logits instead of probabilities for sampling flexibility
         return output
 
 

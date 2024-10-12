@@ -2,7 +2,7 @@
 # also making sure they torch.compile
 
 import torch
-from personalpytorchtransformers.models import MultiHeadAttention, PositionWiseFeedForward, PositionalEncoding, DecoderBlock, DecoderOnlyTransformer
+from personaltransformers.models import MultiHeadAttention, PositionWiseFeedForward, PositionalEncoding, DecoderBlock, DecoderOnlyTransformer
 
 def test_mha():
     mha_module = MultiHeadAttention(
@@ -70,6 +70,8 @@ def test_decoder_only_transformer():
     # batch size of 5, seq len of 3
     example_input = torch.randint(low=0, high=12, size=(5, 3))
     test_output = dec_only_transformer_module(example_input)
+    # output should be dims (batch_size, sequence_length, vocab_size)
+    # predicted logits are output[:, -1, :]
     assert test_output.size() == torch.Size((5,3,12))
 
 
