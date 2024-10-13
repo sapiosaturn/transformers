@@ -25,7 +25,7 @@ class TxtFileDataset(Dataset):
         return len(self.vocab)
 
     def tokenize(self, sequence):
-        return torch.Tensor([self.char_to_idx[c] for c in sequence])
+        return torch.tensor([self.char_to_idx[c] for c in sequence], dtype=torch.long)
 
     def __len__(self):
         return len(self.data) - self.sequence_length - 1
@@ -33,6 +33,6 @@ class TxtFileDataset(Dataset):
     def __getitem__(self, index):
         # returned sequences should be sequences of token IDs
         x = self.tokenize(self.data[index:index+self.sequence_length])
-        y = self.tokenize(self.data[index+self.sequence_length+1]) # the next token to predict
+        y = self.tokenize(self.data[index+1:index+self.sequence_length+1]) # shifting x sequence by one
         return x, y
 

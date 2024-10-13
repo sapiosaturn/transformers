@@ -1,28 +1,34 @@
-# NOTE: training with random placeholder dataset to begin with
+# NOTE: training with placeholder dataset to begin with
 
 import torch
 import torch.optim as optim
+import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 from models import DecoderOnlyTransformer
+from data import TxtFileDataset
 
 TRAINING_CONFIG = {
-    "device": "cpu",
-    "batch_size": 4,
-    "learning_rate": 0.01,
-    "num_epochs": 10
+    "device": "auto",
+    "batch_size": 8,
+    "learning_rate": 5e-2,
+    "num_epochs": 100
 }
 
 MODEL_CONFIG = {
-    "vocab_size": 26,
+    "vocab_size": 65,
     "num_layers": 3,
-    "embedding_dim": 8,
-    "num_heads": 2,
-    "context_length": 4,
-    "feedforward_dim": 16,
-    "attention_dropout_p": 0,
-    "residual_dropout_p": 0
+    "embedding_dim": 16,
+    "num_heads": 4,
+    "context_length": 8,
+    "feedforward_dim": 32,
+    "attention_dropout_p": 0.1,
+    "residual_dropout_p": 0.1
 }
+
+dataset = TxtFileDataset(r'./datasets/tinyshakespeare.txt', MODEL_CONFIG["context_length"])
+assert dataset.get_vocab_size() == MODEL_CONFIG["vocab_size"]
 
 model = DecoderOnlyTransformer(
     vocab_size = MODEL_CONFIG["vocab_size"],
@@ -35,3 +41,41 @@ model = DecoderOnlyTransformer(
     residual_dropout_p = MODEL_CONFIG["residual_dropout_p"]
 )
 
+# determine the device we'll train on
+if TRAINING_CONFIG["device"] == "auto":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+else:
+    device = TRAINING_CONFIG["device"]
+model = model.to(device)
+print("running on device: ", device)
+
+opt = optim.AdamW(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
+
+@torch.compile(fullgraph=False)
+def opt_step():
+    opt.step
+
+model = torch.compile(model)
+train_loader = DataLoader(dataset, batch_size=TRAINING_CONFIG["batch_size"], shuffle=True)
+
+for e in range(TRAINING_CONFIG["num_epochs"]):
+    print(f"epoch {e} —")
+    running_loss = 0.
+    for i, batch in enumerate(train_loader):
+        x, y = batch
+        opt.zero_grad()
+        logits = model(x)
+        # cross entropy expects (pseudo_batch_size, number_of_classes), so we reshape the logits into that
+        # y is shaped like (pseudo_batch_size) since the target is the "correct" class
+        # important to note here that pseudo_batch_size = batch_size * sequence_length
+        # logits are batch_size, sequence_length, vocab_size
+        pseudo_batch_size = logits.size(0)*logits.size(1)
+        loss_value = F.cross_entropy(logits.view(logits.size(0)*logits.size(1), logits.size(2)), y.view(y.size(0)*y.size(1)))
+        loss_value.backward()
+        opt_step()
+
+        running_loss += loss_value.item()
+        if i % 10000 == 9999:
+            last_loss = running_loss / 10000 # loss per batch
+            print(f"  batch {i+1} loss: {last_loss}")
+            running_loss = 0.
