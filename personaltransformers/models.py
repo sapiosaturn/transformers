@@ -27,7 +27,7 @@ class MultiHeadAttention(nn.Module):
     # TODO: add parameterized attention matrix sizes
     def __init__(self, embedding_dim, num_heads, context_length, attention_dropout_p, residual_dropout_p):
         super().__init__()
-        assert embedding_dim % num_heads == 0 
+        assert embedding_dim % num_heads == 0
 
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
@@ -123,10 +123,10 @@ class DecoderBlock(nn.Module):
 
     def forward(self, x):
         # should be straightforward, dimensions stay the same
-        output = x + self.attention_block(x)
-        output = self.layer_norm_attention(output)
-        output = output + self.ff_block(output)
+        output = self.layer_norm_attention(x)
+        output = output + self.attention_block(output)
         output = self.layer_norm_ff(output)
+        output = output + self.ff_block(output)
         return output
 
 

@@ -11,20 +11,20 @@ from data import TxtFileDataset
 
 TRAINING_CONFIG = {
     "device": "auto",
-    "batch_size": 8,
-    "learning_rate": 5e-2,
+    "batch_size": 16,
+    "learning_rate": 1e-7,
     "num_epochs": 100
 }
 
 MODEL_CONFIG = {
     "vocab_size": 65,
-    "num_layers": 3,
-    "embedding_dim": 16,
+    "num_layers": 6,
+    "embedding_dim": 64,
     "num_heads": 4,
-    "context_length": 8,
-    "feedforward_dim": 32,
-    "attention_dropout_p": 0.1,
-    "residual_dropout_p": 0.1
+    "context_length": 256,
+    "feedforward_dim": 128,
+    "attention_dropout_p": 0.0,
+    "residual_dropout_p": 0.0
 }
 
 dataset = TxtFileDataset(r'./datasets/tinyshakespeare.txt', MODEL_CONFIG["context_length"])
@@ -40,6 +40,9 @@ model = DecoderOnlyTransformer(
     attention_dropout_p = MODEL_CONFIG["attention_dropout_p"],
     residual_dropout_p = MODEL_CONFIG["residual_dropout_p"]
 )
+
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"model has {trainable_params} trainable parameters")
 
 # determine the device we'll train on
 if TRAINING_CONFIG["device"] == "auto":
@@ -72,10 +75,10 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
         pseudo_batch_size = logits.size(0)*logits.size(1)
         loss_value = F.cross_entropy(logits.view(logits.size(0)*logits.size(1), logits.size(2)), y.view(y.size(0)*y.size(1)))
         loss_value.backward()
-        opt_step()
+        opt.step()
 
         running_loss += loss_value.item()
-        if i % 10000 == 9999:
-            last_loss = running_loss / 10000 # loss per batch
+        if i % 1000 == 999:
+            last_loss = running_loss / 1000 # loss per batch
             print(f"  batch {i+1} loss: {last_loss}")
             running_loss = 0.
