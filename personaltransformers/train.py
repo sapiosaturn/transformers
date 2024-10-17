@@ -66,6 +66,8 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
     running_loss = 0.
     for i, batch in enumerate(train_loader):
         x, y = batch
+        x = x.to(device)
+        y = y.to(device)
         opt.zero_grad()
         logits = model(x)
         # cross entropy expects (pseudo_batch_size, number_of_classes), so we reshape the logits into that
@@ -82,3 +84,4 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
             last_loss = running_loss / 1000 # loss per batch
             print(f"  batch {i+1} loss: {last_loss}")
             running_loss = 0.
+
