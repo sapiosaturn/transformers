@@ -18,8 +18,50 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# NOTE: for now, these implmentations do not use FlashAttention, and are slow
-# NOTE: decoder-only transformers for now, so no 
+# NOTE: decoder-only transformers for now, so no custom masks
+
+class MultiHeadAttention_Fast(nn.Module):
+    def __init__(self, embedding_dim, num_heads, context_length, attention_dropout_p, residual_dropout_p):
+        super().__init__()
+        assert embedding_dim % num_heads == 0
+
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.per_head_dim = self.embedding_dim // self.num_heads
+        self.context_length = context_length
+
+        # W_Q, W_K, W_V for all attention heads
+        self.attention_matrices = nn.Linear(embedding_dim, 3*embedding_dim)
+        self.output_proj = nn.Linear(embedding_dim, embedding_dim)
+
+        self.attention_dropout_p = attention_dropout_p
+        self.residual_dropout = nn.Dropout(p = residual_dropout_p)
+
+    def forward(self, x):
+        batch_size, seq_length, _ = x.size()
+        # each q, k, v matrix is (batch size, seq_length, embedding_dim, embedding_dim) here
+        # forward pass on the attention_matrices linear layer results in calculating queries, keys, values
+        # corresponding to the tokens that are there
+        Q, K, V = self.attention_matrices(x).split(self.embedding_dim, dim=2)
+        # transposing here so next operations are done per attention head 
+        Q = Q.view(batch_size, seq_length, self.num_heads, self.per_head_dim).transpose(1,2)
+        K = K.view(batch_size, seq_length, self.num_heads, self.per_head_dim).transpose(1,2)
+        V = V.view(batch_size, seq_length, self.num_heads, self.per_head_dim).transpose(1,2)
+
+        # calling efficient attention kernel
+        output = F.scaled_dot_product_attention(
+            query=Q,
+            key=K,
+            value=V,
+            dropout_p=self.attention_dropout_p,
+            is_causal=True
+        )
+
+        # transpose to move num_heads back to original dim and then recombine
+        output = output.transpose(1, 2).contiguous().view(batch_size, seq_length, self.embedding_dim)
+        output = self.output_proj(output)
+        output = self.residual_dropout(output)
+        return output
 
 class MultiHeadAttention(nn.Module):
     # mostly taken from minGPT
@@ -71,7 +113,8 @@ class MultiHeadAttention(nn.Module):
         output = torch.einsum('...ik,...kj->...ij', attention_scores, V)
         # transpose to move num_heads back to original dim and then recombine
         output = output.transpose(1, 2).contiguous().view(batch_size, seq_length, self.embedding_dim)
-        output = self.residual_dropout(output) # is this really a "residual" dropout?
+        output = self.output_proj(output) # whoops - forgot this
+        output = self.residual_dropout(output)
         return output
 
 class PositionWiseFeedForward(nn.Module):
@@ -107,7 +150,7 @@ class PositionalEncoding(nn.Module):
 class DecoderBlock(nn.Module):
     def __init__(self, embedding_dim, num_heads, context_length, feedforward_dim, attention_dropout_p, residual_dropout_p):
         super().__init__()
-        self.attention_block = MultiHeadAttention(
+        self.attention_block = MultiHeadAttention_Fast(
             embedding_dim=embedding_dim,
             num_heads=num_heads,
             context_length=context_length,
