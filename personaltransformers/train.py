@@ -54,10 +54,6 @@ print("running on device: ", device)
 
 opt = optim.AdamW(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
 
-@torch.compile(fullgraph=False)
-def opt_step():
-    opt.step
-
 model = torch.compile(model)
 train_loader = DataLoader(dataset, batch_size=TRAINING_CONFIG["batch_size"], shuffle=True)
 
