@@ -150,9 +150,10 @@ class PositionalEncoding(nn.Module):
 class DecoderBlock(nn.Module):
     def __init__(self, embedding_dim, num_heads, context_length, feedforward_dim, attention_dropout_p, residual_dropout_p):
         super().__init__()
-        self.attention_block = MultiHeadAttention_Fast(
+        self.attention_block = GroupedQueryAttention(
             embedding_dim=embedding_dim,
             num_heads=num_heads,
+            num_kv_heads=num_heads//2, # placeholder based on popular value
             context_length=context_length,
             attention_dropout_p=attention_dropout_p,
             residual_dropout_p=residual_dropout_p
@@ -203,7 +204,56 @@ class DecoderOnlyTransformer(nn.Module):
 
 
 class GroupedQueryAttention(nn.Module):
-    pass
+    # for grouped query attention, many queries are grouped together with a single key and value matrix
+    def __init__(self, embedding_dim, num_heads, num_kv_heads, context_length, attention_dropout_p, residual_dropout_p):
+        super().__init__()
+        assert embedding_dim % num_heads == 0
+        assert num_heads % num_kv_heads == 0
+
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.per_head_dim = self.embedding_dim // self.num_heads
+        self.per_kv_head_queries = self.num_heads // self.num_kv_heads
+        self.context_length = context_length
+
+        # W_Q, W_K, W_V for all attention heads
+        self.Q = nn.Linear(embedding_dim, embedding_dim)
+        self.K = nn.Linear(embedding_dim, self.num_kv_heads * self.per_head_dim)
+        self.V = nn.Linear(embedding_dim, self.num_kv_heads * self.per_head_dim)
+        self.output_proj = nn.Linear(embedding_dim, embedding_dim)
+
+        self.attention_dropout_p = attention_dropout_p
+        self.residual_dropout = nn.Dropout(p = residual_dropout_p)
+
+    def forward(self, x):
+        batch_size, seq_length, _ = x.size()
+        # each q, k, v matrix is (batch size, seq_length, embedding_dim, embedding_dim) here
+        # forward pass on the attention_matrices linear layer results in calculating queries, keys, values
+        # corresponding to the tokens that are there
+        # transposing here so next operations are done per attention head 
+        Q = self.Q(x)
+        K = self.K(x)
+        V = self.V(x)
+        Q = Q.view(batch_size, seq_length, self.num_heads, self.per_head_dim).transpose(1,2)
+        K = K.view(batch_size, seq_length, self.num_kv_heads, self.per_head_dim).transpose(1,2)
+        V = V.view(batch_size, seq_length, self.num_kv_heads, self.per_head_dim).transpose(1,2)
+
+        # calling efficient attention kernel
+        output = F.scaled_dot_product_attention(
+            query=Q,
+            key=K,
+            value=V,
+            dropout_p=self.attention_dropout_p,
+            is_causal=True,
+            enable_gqa=True
+        )
+
+        # transpose to move num_heads back to original dim and then recombine
+        output = output.transpose(1, 2).contiguous().view(batch_size, seq_length, self.embedding_dim)
+        output = self.output_proj(output)
+        output = self.residual_dropout(output)
+        return output
 
 class MultiHeadLatentAttention(nn.Module):
     pass

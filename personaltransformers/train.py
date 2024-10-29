@@ -12,20 +12,22 @@ from data import TxtFileDataset
 TRAINING_CONFIG = {
     "device": "auto",
     "batch_size": 16,
-    "learning_rate": 1e-7,
+    "learning_rate": 1e-6,
     "num_epochs": 100
 }
 
 MODEL_CONFIG = {
     "vocab_size": 65,
-    "num_layers": 6,
-    "embedding_dim": 64,
+    "num_layers": 3,
+    "embedding_dim": 32,
     "num_heads": 4,
-    "context_length": 256,
-    "feedforward_dim": 128,
-    "attention_dropout_p": 0.0,
-    "residual_dropout_p": 0.0
+    "context_length": 32,
+    "feedforward_dim": 64,
+    "attention_dropout_p": 0.05,
+    "residual_dropout_p": 0.05
 }
+
+REPORTING_FACTOR = 100
 
 dataset = TxtFileDataset(r'./datasets/tinyshakespeare.txt', MODEL_CONFIG["context_length"])
 assert dataset.get_vocab_size() == MODEL_CONFIG["vocab_size"]
@@ -76,8 +78,8 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
         opt.step()
 
         running_loss += loss_value.item()
-        if i % 1000 == 999:
-            last_loss = running_loss / 1000 # loss per batch
-            print(f"  batch {i+1} loss: {last_loss}")
+        if i % REPORTING_FACTOR == REPORTING_FACTOR-1:
+            last_loss = running_loss / REPORTING_FACTOR # loss per batch
+            print(f"  batch size {TRAINING_CONFIG['batch_size']}, step {i+1} loss: {last_loss:.5f}")
             running_loss = 0.
 
