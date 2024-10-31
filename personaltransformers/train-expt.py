@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from models import DecoderOnlyTransformer
+from experimental_models import DecoderOnlyTransformerMHFFN
 from data import TxtFileDataset
 
 TRAINING_CONFIG = {
@@ -24,7 +24,7 @@ MODEL_CONFIG = {
     "embedding_dim": 64,
     "num_heads": 4,
     "context_length": 32,
-    "feedforward_dim": 96,
+    "feedforward_dim": 256,
     "attention_dropout_p": 0.05,
     "residual_dropout_p": 0.05
 }
@@ -36,7 +36,7 @@ writer = SummaryWriter()
 dataset = TxtFileDataset(r'./datasets/tinyshakespeare.txt', MODEL_CONFIG["context_length"])
 assert dataset.get_vocab_size() == MODEL_CONFIG["vocab_size"]
 
-model = DecoderOnlyTransformer(
+model = DecoderOnlyTransformerMHFFN(
     vocab_size = MODEL_CONFIG["vocab_size"],
     num_layers = MODEL_CONFIG["num_layers"],
     embedding_dim = MODEL_CONFIG["embedding_dim"],
