@@ -27,6 +27,9 @@ class TxtFileDataset(Dataset):
     def tokenize(self, sequence):
         return torch.tensor([self.char_to_idx[c] for c in sequence], dtype=torch.long)
 
+    def detokenize(self, token_ids):
+        return ''.join([self.idx_to_char[int(id)] for id in token_ids])
+
     def __len__(self):
         return len(self.data) - self.sequence_length - 1
 
@@ -35,4 +38,3 @@ class TxtFileDataset(Dataset):
         x = self.tokenize(self.data[index:index+self.sequence_length])
         y = self.tokenize(self.data[index+1:index+self.sequence_length+1]) # shifting x sequence by one
         return x, y
-

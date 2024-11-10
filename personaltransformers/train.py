@@ -8,14 +8,15 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from models import DecoderOnlyTransformer
+from models import CausalTransformer
 from data import TxtFileDataset
+from inference import sample
 
 TRAINING_CONFIG = {
-    "device": "auto",
+    "device": "auto", 
     "batch_size": 32,
     "learning_rate": 1e-6,
-    "num_epochs": 10
+    "num_epochs": 10,
 }
 
 MODEL_CONFIG = {
@@ -23,24 +24,28 @@ MODEL_CONFIG = {
     "num_layers": 6,
     "embedding_dim": 64,
     "num_heads": 4,
-    "context_length": 32,
-    "feedforward_dim": 96,
+    "num_kv_heads": 4,
+    "context_length": 128,
+    "feedforward_dim": 256,
     "attention_dropout_p": 0.05,
     "residual_dropout_p": 0.05
 }
 
 REPORTING_FACTOR = 100
+SAMPLING_FACTOR = 500
+SAMPLING_LENGTH = 3*MODEL_CONFIG["context_length"]
 
 writer = SummaryWriter()
 
 dataset = TxtFileDataset(r'./datasets/tinyshakespeare.txt', MODEL_CONFIG["context_length"])
 assert dataset.get_vocab_size() == MODEL_CONFIG["vocab_size"]
 
-model = DecoderOnlyTransformer(
+model = CausalTransformer(
     vocab_size = MODEL_CONFIG["vocab_size"],
     num_layers = MODEL_CONFIG["num_layers"],
     embedding_dim = MODEL_CONFIG["embedding_dim"],
     num_heads = MODEL_CONFIG["num_heads"],
+    num_kv_heads = MODEL_CONFIG["num_kv_heads"],
     context_length = MODEL_CONFIG["context_length"],
     feedforward_dim = MODEL_CONFIG["feedforward_dim"],
     attention_dropout_p = MODEL_CONFIG["attention_dropout_p"],
@@ -92,5 +97,26 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
             print(f"  batch size {TRAINING_CONFIG['batch_size']}, step {i+1} loss: {last_loss:.5f}")
             running_loss = 0.
 
-writer.flush()
+        if i % SAMPLING_FACTOR == SAMPLING_FACTOR-1:
+            model.eval()
+            # batch size of 1, sequence length of 1 - just a random token
+            random_token = torch.randint(low=0, high=MODEL_CONFIG["vocab_size"], size=(1,1))
+            
+            # generate using sample method
+            tokens, generated_text = sample(
+                model=model,
+                context=random_token,
+                num_tokens=SAMPLING_LENGTH,
+                context_length=MODEL_CONFIG["context_length"],
+                device=device,
+                dataset=dataset
+            )
+            
+            print("\nGenerated text sample:")
+            print(generated_text)
+            print("\n")
+            
+            # Return to training mode
+            model.train()
 
+writer.flush()
