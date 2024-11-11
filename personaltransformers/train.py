@@ -35,7 +35,7 @@ MODEL_CONFIG = {
 REPORTING_FACTOR = 1000
 SAMPLING_FACTOR = 5000
 SAMPLING_LENGTH = 4*MODEL_CONFIG["context_length"]
-LR_INCREASE_FACTOR = 250
+LR_WARMUP_STEPS = 2500
 
 writer = SummaryWriter()
 
@@ -67,7 +67,7 @@ model = model.to(device)
 print("running on device: ", device)
 
 opt = optim.AdamW(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
-scheduler = lr_scheduler.LinearLR(opt, 0.1, 1, 10*LR_INCREASE_FACTOR)
+scheduler = lr_scheduler.LinearLR(opt, 0.1, 1, LR_WARMUP_STEPS) # lr increases every step
 
 model = torch.compile(model)
 train_loader = DataLoader(dataset, batch_size=TRAINING_CONFIG["batch_size"], shuffle=True)
@@ -91,16 +91,13 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
         loss_value = F.cross_entropy(logits.view(logits.size(0)*logits.size(1), logits.size(2)), y.view(y.size(0)*y.size(1)))
         loss_value.backward()
         opt.step()
+        scheduler.step()
         global_step+=1
 
         loss_scalar = loss_value.item()
 
         writer.add_scalar("Loss/train", loss_scalar, global_step)
         running_loss += loss_scalar
-
-        if global_step % LR_INCREASE_FACTOR == 0:
-            scheduler.step()
-            print(f"new learning rate: {opt.param_groups[0]['lr']}")
 
         if i % REPORTING_FACTOR == REPORTING_FACTOR-1:
             last_loss = running_loss / REPORTING_FACTOR # loss per batch
