@@ -158,14 +158,15 @@ class CausalTransformer(nn.Module):
                 residual_dropout_p=residual_dropout_p
             ) for _ in range(num_layers)
         ])
-        self.final_linear = nn.Linear(embedding_dim, vocab_size, bias=False)
+        self.lm_head = nn.Linear(embedding_dim, vocab_size, bias=False)
+        nn.init.zeros_(self.lm_head.weight)
 
     def forward(self, x):
         # x is batch size, seq_len where each value is a token index
         output = self.embedding_layer(x)
         for layer in self.decoder_stack:
             output = layer(output, self.freqs_cis)
-        output = self.final_linear(output)
+        output = self.lm_head(output)
         # return logits instead of probabilities for sampling flexibility
         return output
 
