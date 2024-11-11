@@ -2,6 +2,7 @@
 
 import torch
 import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -22,11 +23,11 @@ TRAINING_CONFIG = {
 MODEL_CONFIG = {
     "vocab_size": 65,
     "num_layers": 8,
-    "embedding_dim": 1024,
+    "embedding_dim": 2048,
     "num_heads": 8,
     "num_kv_heads": 4,
     "context_length": 256,
-    "feedforward_dim": 2048,
+    "feedforward_dim": 4096,
     "attention_dropout_p": 0.05,
     "residual_dropout_p": 0.05
 }
@@ -34,6 +35,7 @@ MODEL_CONFIG = {
 REPORTING_FACTOR = 1000
 SAMPLING_FACTOR = 5000
 SAMPLING_LENGTH = 4*MODEL_CONFIG["context_length"]
+LR_INCREASE_FACTOR = 1000
 
 writer = SummaryWriter()
 
@@ -65,11 +67,12 @@ model = model.to(device)
 print("running on device: ", device)
 
 opt = optim.AdamW(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
+scheduler = lr_scheduler.LinearLR(opt, 1, 10, 10*LR_INCREASE_FACTOR)
 
 model = torch.compile(model)
 train_loader = DataLoader(dataset, batch_size=TRAINING_CONFIG["batch_size"], shuffle=True)
 
-batches_per_epoch = len(dataset) // TRAINING_CONFIG["batch_size"]
+global_step = 0
 
 for e in range(TRAINING_CONFIG["num_epochs"]):
     print(f"epoch {e} —")
@@ -88,11 +91,16 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
         loss_value = F.cross_entropy(logits.view(logits.size(0)*logits.size(1), logits.size(2)), y.view(y.size(0)*y.size(1)))
         loss_value.backward()
         opt.step()
+        global_step+=1
 
         loss_scalar = loss_value.item()
 
-        writer.add_scalar("Loss/train", loss_scalar, e*batches_per_epoch + i)
+        writer.add_scalar("Loss/train", loss_scalar, global_step)
         running_loss += loss_scalar
+
+        if global_step % LR_INCREASE_FACTOR == 0:
+            scheduler.step()
+            print(f"new learning rate: {opt.param_groups[0]['lr']}")
 
         if i % REPORTING_FACTOR == REPORTING_FACTOR-1:
             last_loss = running_loss / REPORTING_FACTOR # loss per batch
@@ -114,7 +122,7 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
             )
             print("\nGenerated text sample:")
             print(generated_text)
-            writer.add_text("Sampled Text", generated_text, e*batches_per_epoch + i)
+            writer.add_text("Sampled Text", generated_text, global_step)
             print("\n")
             # Return to training mode
             model.train()
