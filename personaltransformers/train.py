@@ -16,7 +16,7 @@ from inference import sample
 TRAINING_CONFIG = {
     "device": "auto", 
     "batch_size": 32,
-    "learning_rate": 1e-6,
+    "learning_rate": 1e-6, # max learning rate
     "num_epochs": 10,
 }
 
@@ -67,7 +67,7 @@ model = model.to(device)
 print("running on device: ", device)
 
 opt = optim.AdamW(model.parameters(), lr=TRAINING_CONFIG["learning_rate"])
-scheduler = lr_scheduler.LinearLR(opt, 1, 10, 10*LR_INCREASE_FACTOR)
+scheduler = lr_scheduler.LinearLR(opt, 0.1, 1, 10*LR_INCREASE_FACTOR)
 
 model = torch.compile(model)
 train_loader = DataLoader(dataset, batch_size=TRAINING_CONFIG["batch_size"], shuffle=True)
