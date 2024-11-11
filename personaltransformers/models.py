@@ -13,8 +13,6 @@ References (papers)
 
 """
 
-import math
-
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -36,10 +34,11 @@ class GroupedQueryAttention(nn.Module):
         self.context_length = context_length
 
         # W_Q, W_K, W_V for all attention heads
-        self.Q = nn.Linear(embedding_dim, embedding_dim)
-        self.K = nn.Linear(embedding_dim, self.num_kv_heads * self.per_head_dim)
-        self.V = nn.Linear(embedding_dim, self.num_kv_heads * self.per_head_dim)
-        self.output_proj = nn.Linear(embedding_dim, embedding_dim)
+        self.Q = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.K = nn.Linear(embedding_dim, self.num_kv_heads * self.per_head_dim, bias=False)
+        self.V = nn.Linear(embedding_dim, self.num_kv_heads * self.per_head_dim, bias=False)
+        self.output_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        nn.init.zeros_(self.output_proj.weight)
 
         self.attention_dropout_p = attention_dropout_p
         self.residual_dropout = nn.Dropout(p = residual_dropout_p)
@@ -71,7 +70,8 @@ class GroupedQueryAttention(nn.Module):
         Q = Q.view(batch_size, seq_length, self.num_heads, self.per_head_dim)
         K = K.view(batch_size, seq_length, self.num_kv_heads, self.per_head_dim)
         V = V.view(batch_size, seq_length, self.num_kv_heads, self.per_head_dim).transpose(1,2)
-
+        Q = F.rms_norm(Q, (Q.size(-1),))
+        K = F.rms_norm(K, (K.size(-1),))
         Q = self.apply_rope(Q, freqs_cis).transpose(1,2)
         K = self.apply_rope(K, freqs_cis).transpose(1,2)
 
@@ -106,13 +106,13 @@ class PositionWiseFeedForward(nn.Module):
     # position-wise FF layer
     def __init__(self, model_dim, feedforward_dim):
         super().__init__()
-        self.to_hidden = nn.Linear(model_dim, feedforward_dim)
-        self.from_hidden = nn.Linear(feedforward_dim, model_dim)
+        self.to_hidden = nn.Linear(model_dim, feedforward_dim, bias=False)
+        self.from_hidden = nn.Linear(feedforward_dim, model_dim, bias=False)
 
     def forward(self, x):
         # dimensions of x are batch_size, seq_length, embedding_dim
         # which is also batch_size, seq_length, model_dim
-        return self.from_hidden(F.relu(self.to_hidden(x)))
+        return self.from_hidden(F.relu(self.to_hidden(x)).square())
 
 class DecoderBlockGQA(nn.Module):
     def __init__(self, embedding_dim, num_heads, num_kv_heads, context_length, feedforward_dim, attention_dropout_p, residual_dropout_p):
@@ -125,18 +125,16 @@ class DecoderBlockGQA(nn.Module):
             attention_dropout_p=attention_dropout_p,
             residual_dropout_p=residual_dropout_p
         )
-        self.layer_norm_attention = nn.LayerNorm(embedding_dim)
         self.ff_block = PositionWiseFeedForward(
             model_dim=embedding_dim,
             feedforward_dim=feedforward_dim
         )
-        self.layer_norm_ff = nn.LayerNorm(embedding_dim)
 
     def forward(self, x, freqs_cis):
         # should be straightforward, dimensions stay the same
-        output = self.layer_norm_attention(x)
+        output = F.rms_norm(x, (x.size(-1),)) # last dim is embedding_dim
         output = output + self.attention_block(output, freqs_cis)
-        output = self.layer_norm_ff(output)
+        output = F.rms_norm(output, (output.size(-1),)) # last dim is embedding_dim
         output = output + self.ff_block(output)
         return output
 
@@ -164,8 +162,10 @@ class CausalTransformer(nn.Module):
     def forward(self, x):
         # x is batch size, seq_len where each value is a token index
         output = self.embedding_layer(x)
+        output = F.rms_norm(output, (output.size(-1),))
         for layer in self.decoder_stack:
             output = layer(output, self.freqs_cis)
+        output = F.rms_norm(output, (output.size(-1),))
         output = self.lm_head(output)
         # return logits instead of probabilities for sampling flexibility
         return output

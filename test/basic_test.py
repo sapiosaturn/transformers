@@ -13,7 +13,6 @@ def precompute_freqs_cis(dim, end, theta = 10000.0):
     # imo more readable than ones_like
     freqs_cis = torch.polar(torch.ones(freqs.size()), freqs)
     # output dimensions are (end, dim//2)
-    print(freqs_cis.size())
     return freqs_cis
 
 def test_gqa():
@@ -22,14 +21,13 @@ def test_gqa():
         num_heads=4,
         num_kv_heads=2,
         context_length=4,
-        freqs_cis=precompute_freqs_cis(dim=4, end=4),
         attention_dropout_p=0,
         residual_dropout_p=0
     )
     mha_module = torch.compile(mha_module)
     # batch size of 5, seq len of 3, embedding dim of 8
     example_input = torch.randn((5, 3, 16))
-    test_output = mha_module(example_input)
+    test_output = mha_module(example_input, precompute_freqs_cis(dim=4, end=4))
     assert test_output.size() == example_input.size()
 
 def test_pwff():
@@ -50,14 +48,13 @@ def test_decoder_block():
         num_kv_heads=2,
         context_length=4,
         feedforward_dim=16,
-        freqs_cis=precompute_freqs_cis(4, 4),
         attention_dropout_p=0,
         residual_dropout_p=0
     )
     decoder_block_module = torch.compile(decoder_block_module)
     # batch size of 5, seq len of 3, embedding dim of 8
     example_input = torch.randn((5, 3, 8))
-    test_output = decoder_block_module(example_input)
+    test_output = decoder_block_module(example_input, precompute_freqs_cis(4, 4))
     assert test_output.size() == example_input.size()
 
 def test_decoder_only_transformer():
