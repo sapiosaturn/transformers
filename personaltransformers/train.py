@@ -21,19 +21,19 @@ TRAINING_CONFIG = {
 
 MODEL_CONFIG = {
     "vocab_size": 65,
-    "num_layers": 6,
-    "embedding_dim": 64,
-    "num_heads": 4,
+    "num_layers": 8,
+    "embedding_dim": 1024,
+    "num_heads": 8,
     "num_kv_heads": 4,
-    "context_length": 128,
-    "feedforward_dim": 256,
+    "context_length": 256,
+    "feedforward_dim": 2048,
     "attention_dropout_p": 0.05,
     "residual_dropout_p": 0.05
 }
 
-REPORTING_FACTOR = 100
-SAMPLING_FACTOR = 500
-SAMPLING_LENGTH = 3*MODEL_CONFIG["context_length"]
+REPORTING_FACTOR = 1000
+SAMPLING_FACTOR = 5000
+SAMPLING_LENGTH = 4*MODEL_CONFIG["context_length"]
 
 writer = SummaryWriter()
 
@@ -89,8 +89,10 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
         loss_value.backward()
         opt.step()
 
-        writer.add_scalar("Loss/train", loss_value.item(), e*batches_per_epoch + i)
-        running_loss += loss_value.item()
+        loss_scalar = loss_value.item()
+
+        writer.add_scalar("Loss/train", loss_scalar, e*batches_per_epoch + i)
+        running_loss += loss_scalar
 
         if i % REPORTING_FACTOR == REPORTING_FACTOR-1:
             last_loss = running_loss / REPORTING_FACTOR # loss per batch
@@ -101,7 +103,6 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
             model.eval()
             # batch size of 1, sequence length of 1 - just a random token
             random_token = torch.randint(low=0, high=MODEL_CONFIG["vocab_size"], size=(1,1))
-            
             # generate using sample method
             tokens, generated_text = sample(
                 model=model,
@@ -111,11 +112,10 @@ for e in range(TRAINING_CONFIG["num_epochs"]):
                 device=device,
                 dataset=dataset
             )
-            
             print("\nGenerated text sample:")
             print(generated_text)
+            writer.add_text("Sampled Text", generated_text, e*batches_per_epoch + i)
             print("\n")
-            
             # Return to training mode
             model.train()
 

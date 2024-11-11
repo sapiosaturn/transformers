@@ -23,7 +23,7 @@ from torch.nn import functional as F
 
 class GroupedQueryAttention(nn.Module):
     # for grouped query attention, many queries are grouped together with a single key and value matrix
-    def __init__(self, embedding_dim, num_heads, num_kv_heads, context_length, freqs_cis, attention_dropout_p, residual_dropout_p):
+    def __init__(self, embedding_dim, num_heads, num_kv_heads, context_length, attention_dropout_p, residual_dropout_p):
         super().__init__()
         assert embedding_dim % num_heads == 0
         assert num_heads % num_kv_heads == 0
@@ -34,7 +34,6 @@ class GroupedQueryAttention(nn.Module):
         self.per_head_dim = self.embedding_dim // self.num_heads
         self.per_kv_head_queries = self.num_heads // self.num_kv_heads
         self.context_length = context_length
-        self.freqs_cis = freqs_cis
 
         # W_Q, W_K, W_V for all attention heads
         self.Q = nn.Linear(embedding_dim, embedding_dim)
@@ -45,7 +44,7 @@ class GroupedQueryAttention(nn.Module):
         self.attention_dropout_p = attention_dropout_p
         self.residual_dropout = nn.Dropout(p = residual_dropout_p)
 
-    def apply_rope(self, x):
+    def apply_rope(self, x, freqs_cis):
         batch_size, seq_length, num_heads, per_head_dim = x.size()
         # reshaping does the "division into d/2" subspaces
         # viewed as complex so you can simply multiply the complex number
@@ -53,14 +52,14 @@ class GroupedQueryAttention(nn.Module):
         x_complex = torch.view_as_complex(
             x.reshape(batch_size, seq_length, num_heads, per_head_dim//2, 2)
         )
-        freqs_cis = self.freqs_cis[:seq_length].view(1, seq_length, 1, per_head_dim//2) # flatten for multiply
+        freqs_cis = freqs_cis[:seq_length].view(1, seq_length, 1, per_head_dim//2) # flatten for multiply
         x_rotated = x_complex * freqs_cis
         # reshape back to normal
         x_out = torch.view_as_real(x_rotated)
         x_out = x_out.reshape(batch_size, seq_length, num_heads, per_head_dim)
         return x_out
 
-    def forward(self, x):
+    def forward(self, x, freqs_cis):
         batch_size, seq_length, _ = x.size()
         # each q, k, v matrix is (batch size, seq_length, embedding_dim, embedding_dim) here
         # forward pass on the attention_matrices linear layer results in calculating queries, keys, values
@@ -73,8 +72,8 @@ class GroupedQueryAttention(nn.Module):
         K = K.view(batch_size, seq_length, self.num_kv_heads, self.per_head_dim)
         V = V.view(batch_size, seq_length, self.num_kv_heads, self.per_head_dim).transpose(1,2)
 
-        Q = self.apply_rope(Q).transpose(1,2)
-        K = self.apply_rope(K).transpose(1,2)
+        Q = self.apply_rope(Q, freqs_cis).transpose(1,2)
+        K = self.apply_rope(K, freqs_cis).transpose(1,2)
 
         # calling efficient attention kernel
         output = F.scaled_dot_product_attention(
@@ -116,14 +115,13 @@ class PositionWiseFeedForward(nn.Module):
         return self.from_hidden(F.relu(self.to_hidden(x)))
 
 class DecoderBlockGQA(nn.Module):
-    def __init__(self, embedding_dim, num_heads, num_kv_heads, context_length, feedforward_dim, freqs_cis, attention_dropout_p, residual_dropout_p):
+    def __init__(self, embedding_dim, num_heads, num_kv_heads, context_length, feedforward_dim, attention_dropout_p, residual_dropout_p):
         super().__init__()
         self.attention_block = GroupedQueryAttention(
             embedding_dim=embedding_dim,
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
             context_length=context_length,
-            freqs_cis=freqs_cis,
             attention_dropout_p=attention_dropout_p,
             residual_dropout_p=residual_dropout_p
         )
@@ -134,10 +132,10 @@ class DecoderBlockGQA(nn.Module):
         )
         self.layer_norm_ff = nn.LayerNorm(embedding_dim)
 
-    def forward(self, x):
+    def forward(self, x, freqs_cis):
         # should be straightforward, dimensions stay the same
         output = self.layer_norm_attention(x)
-        output = output + self.attention_block(output)
+        output = output + self.attention_block(output, freqs_cis)
         output = self.layer_norm_ff(output)
         output = output + self.ff_block(output)
         return output
@@ -147,14 +145,14 @@ class CausalTransformer(nn.Module):
         # vocab size is equal for input and output
         super().__init__()
         self.embedding_layer = nn.Embedding(vocab_size, embedding_dim)
-        self.freqs_cis = precompute_freqs_cis(embedding_dim//num_heads, context_length)
+        freqs_cis = precompute_freqs_cis(embedding_dim//num_heads, context_length)
+        self.register_buffer("freqs_cis", freqs_cis)
         self.decoder_stack = nn.ModuleList([
             DecoderBlockGQA(
                 embedding_dim=embedding_dim,
                 num_heads=num_heads,
                 num_kv_heads=num_kv_heads,
                 context_length=context_length,
-                freqs_cis=self.freqs_cis,
                 feedforward_dim=feedforward_dim,
                 attention_dropout_p=attention_dropout_p,
                 residual_dropout_p=residual_dropout_p
@@ -166,7 +164,7 @@ class CausalTransformer(nn.Module):
         # x is batch size, seq_len where each value is a token index
         output = self.embedding_layer(x)
         for layer in self.decoder_stack:
-            output = layer(output)
+            output = layer(output, self.freqs_cis)
         output = self.final_linear(output)
         # return logits instead of probabilities for sampling flexibility
         return output
