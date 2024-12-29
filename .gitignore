@@ -2,4 +2,5 @@ __pycache__
 .DS_Store
 personaltransformers/runs
 personaltransformers/.DS_Store
+.venv
 
