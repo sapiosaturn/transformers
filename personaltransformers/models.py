@@ -16,9 +16,18 @@ References (papers)
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from utils import ModelConfig
 
-# NOTE: decoder-only transformers for now, so no custom masks
-
+def precompute_freqs_cis(dim, end, theta=10000.0):
+    # theta variable is base theta, 10000 in original paper
+    # theta ^ -2(i-1)/d
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end)
+    freqs = torch.outer(t, freqs)
+    # imo more readable than ones_like
+    freqs_cis = torch.polar(torch.ones(freqs.size()), freqs)
+    # output dimensions are (end, dim//2)
+    return freqs_cis
 
 class GroupedQueryAttention(nn.Module):
     # for grouped query attention, many queries are grouped together with a single key and value matrix
@@ -111,125 +120,6 @@ class GroupedQueryAttention(nn.Module):
         output = self.residual_dropout(output)
         return output
 
-
-def precompute_freqs_cis(dim, end, theta=10000.0):
-    # theta variable is base theta, 10000 in original paper
-    # theta ^ -2(i-1)/d
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end)
-    freqs = torch.outer(t, freqs)
-    # imo more readable than ones_like
-    freqs_cis = torch.polar(torch.ones(freqs.size()), freqs)
-    # output dimensions are (end, dim//2)
-    return freqs_cis
-
-
-class PositionWiseFeedForward(nn.Module):
-    # position-wise FF layer
-    def __init__(self, model_dim, feedforward_dim):
-        super().__init__()
-        self.to_hidden = nn.Linear(model_dim, feedforward_dim, bias=False)
-        self.from_hidden = nn.Linear(feedforward_dim, model_dim, bias=False)
-
-    def forward(self, x):
-        # dimensions of x are batch_size, seq_length, embedding_dim
-        # which is also batch_size, seq_length, model_dim
-        return self.from_hidden(F.relu(self.to_hidden(x)).square())
-
-
-class DecoderBlockGQA(nn.Module):
-    def __init__(
-        self,
-        embedding_dim,
-        num_heads,
-        num_kv_heads,
-        context_length,
-        feedforward_dim,
-        attention_dropout_p,
-        residual_dropout_p,
-    ):
-        super().__init__()
-        # self.attention_block = GroupedQueryAttention(
-        #    embedding_dim=embedding_dim,
-        #    num_heads=num_heads,
-        #    num_kv_heads=num_kv_heads,
-        #    context_length=context_length,
-        #    attention_dropout_p=attention_dropout_p,
-        #    residual_dropout_p=residual_dropout_p,
-        # )
-        self.attention_block = MultiHeadLatentAttention(
-            embedding_dim=embedding_dim,
-            num_heads=num_heads,
-            num_kv_heads=num_kv_heads,
-            q_lora_rank=embedding_dim // 2,  # temp
-            kv_lora_rank=embedding_dim // 2,  # temp
-            qk_nope_head_dim=embedding_dim // 4,  # temp
-            qk_rope_head_dim=embedding_dim // 8,  # temp
-            v_head_dim=embedding_dim // 8,
-            context_length=context_length,
-            attention_dropout_p=attention_dropout_p,
-            residual_dropout_p=residual_dropout_p,
-        )
-        self.ff_block = PositionWiseFeedForward(
-            model_dim=embedding_dim, feedforward_dim=feedforward_dim
-        )
-
-    def forward(self, x, freqs_cis):
-        # should be straightforward, dimensions stay the same
-        output = F.rms_norm(x, (x.size(-1),))  # last dim is embedding_dim
-        output = output + self.attention_block(output, freqs_cis)
-        output = F.rms_norm(output, (output.size(-1),))  # last dim is embedding_dim
-        output = output + self.ff_block(output)
-        return output
-
-
-class CausalTransformer(nn.Module):
-    def __init__(
-        self,
-        vocab_size,
-        num_layers,
-        num_kv_heads,
-        embedding_dim,
-        num_heads,
-        context_length,
-        feedforward_dim,
-        attention_dropout_p,
-        residual_dropout_p,
-    ):
-        # vocab size is equal for input and output
-        super().__init__()
-        self.embedding_layer = nn.Embedding(vocab_size, embedding_dim)
-        freqs_cis = precompute_freqs_cis(embedding_dim // 8, context_length)
-        self.register_buffer("freqs_cis", freqs_cis)
-        self.decoder_stack = nn.ModuleList(
-            [
-                DecoderBlockGQA(
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    num_kv_heads=num_kv_heads,
-                    context_length=context_length,
-                    feedforward_dim=feedforward_dim,
-                    attention_dropout_p=attention_dropout_p,
-                    residual_dropout_p=residual_dropout_p,
-                )
-                for _ in range(num_layers)
-            ]
-        )
-        self.lm_head = nn.Linear(embedding_dim, vocab_size, bias=False)
-        nn.init.zeros_(self.lm_head.weight)
-
-    def forward(self, x):
-        # x is batch size, seq_len where each value is a token index
-        output = self.embedding_layer(x)
-        output = F.rms_norm(output, (output.size(-1),))
-        for layer in self.decoder_stack:
-            output = layer(output, self.freqs_cis)
-        output = F.rms_norm(output, (output.size(-1),))
-        output = self.lm_head(output)
-        # return logits instead of probabilities for sampling flexibility
-        return output
-
-
 class MultiHeadLatentAttention(nn.Module):
     # for MLA, queries, keys, and values are all projected down to a low-rank latent tensor
     # before being up-projected for the attention mechanism
@@ -283,7 +173,7 @@ class MultiHeadLatentAttention(nn.Module):
         # this could be two matrices but it's done jointly
         self.KV_b = nn.Linear(
             self.kv_lora_rank,
-            self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
+            self.num_kv_heads * (self.qk_nope_head_dim + self.v_head_dim),
         )
         self.output_proj = nn.Linear(
             self.num_heads * self.v_head_dim, embedding_dim, bias=False
@@ -367,4 +257,94 @@ class MultiHeadLatentAttention(nn.Module):
         )
         output = self.output_proj(output)
         output = self.residual_dropout(output)
+        return output
+
+class MLP(nn.Module):
+    # position-wise FF layer
+    def __init__(self, model_dim, feedforward_dim):
+        super().__init__()
+        self.to_hidden = nn.Linear(model_dim, feedforward_dim, bias=False)
+        self.from_hidden = nn.Linear(feedforward_dim, model_dim, bias=False)
+
+    def forward(self, x):
+        # dimensions of x are batch_size, seq_length, embedding_dim
+        # which is also batch_size, seq_length, model_dim
+        return self.from_hidden(F.relu(self.to_hidden(x)).square())
+
+class DecoderBlock(nn.Module):
+    def __init__(
+        self,
+        model_config: ModelConfig
+    ):
+        super().__init__()
+        if model_config.attention_type == "gqa":
+            self.attention_block = GroupedQueryAttention(
+            embedding_dim=model_config.embedding_dim,
+            num_heads=model_config.num_heads,
+            num_kv_heads=model_config.num_kv_heads,
+            context_length=model_config.context_length,
+            attention_dropout_p=model_config.attention_dropout_p,
+            residual_dropout_p=model_config.residual_dropout_p,
+            )
+        elif model_config.attention_type == 'mla':
+            self.attention_block = MultiHeadLatentAttention(
+                embedding_dim=model_config.embedding_dim,
+                num_heads=model_config.num_heads,
+                num_kv_heads=model_config.num_kv_heads,
+                q_lora_rank=model_config.q_lora_rank,
+                kv_lora_rank=model_config.kv_lora_rank,
+                qk_nope_head_dim=model_config.qk_nope_head_dim,
+                qk_rope_head_dim=model_config.qk_rope_head_dim,
+                v_head_dim=model_config.v_head_dim,
+                context_length=model_config.context_length,
+                attention_dropout_p=model_config.attention_dropout_p,
+                residual_dropout_p=model_config.residual_dropout_p,
+            )
+        else:
+            raise ValueError(f"Unknown attention type: {model_config.attention_type}")
+        self.ff_block = MLP(
+            model_dim=model_config.embedding_dim, feedforward_dim=model_config.feedforward_dim
+        )
+
+    def forward(self, x, freqs_cis):
+        # should be straightforward, dimensions stay the same
+        output = F.rms_norm(x, (x.size(-1),))  # last dim is embedding_dim
+        output = output + self.attention_block(output, freqs_cis)
+        output = F.rms_norm(output, (output.size(-1),))  # last dim is embedding_dim
+        output = output + self.ff_block(output)
+        return output
+
+class CausalTransformer(nn.Module):
+    def __init__(
+        self,
+        model_config: ModelConfig
+    ):
+        # vocab size is equal for input and output
+        super().__init__()
+        self.embedding_layer = nn.Embedding(model_config.vocab_size, model_config.embedding_dim)
+        if model_config.attention_type == 'gqa':
+            freqs_cis = precompute_freqs_cis(model_config.embedding_dim // model_config.num_heads, model_config.context_length)
+        elif model_config.attention_type == 'mla':
+            freqs_cis = precompute_freqs_cis(model_config.qk_rope_head_dim, model_config.context_length)
+        else:
+            raise ValueError(f"Unknown attention type: {model_config.attention_type}")
+        self.register_buffer("freqs_cis", freqs_cis)
+
+        self.decoder_stack = nn.ModuleList(
+            [
+                DecoderBlock(model_config = model_config)
+                for _ in range(model_config.num_layers)
+            ]
+        )
+        self.lm_head = nn.Linear(model_config.embedding_dim, model_config.vocab_size, bias=False)
+        nn.init.zeros_(self.lm_head.weight)
+
+    def forward(self, x):
+        # x is batch size, seq_len where each value is a token index
+        output = self.embedding_layer(x)
+        output = F.rms_norm(output, (output.size(-1),))
+        for layer in self.decoder_stack:
+            output = layer(output, self.freqs_cis)
+        output = F.rms_norm(output, (output.size(-1),))
+        output = self.lm_head(output)
         return output
