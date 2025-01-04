@@ -1,8 +1,0 @@
-{
-  "device": "mps",
-  "batch_size": 32,
-  "learning_rate": 2.5e-4,
-  "lr_warmup_steps": 2500,
-  "num_epochs": 1,
-  "compile": false
-}

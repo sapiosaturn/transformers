@@ -18,7 +18,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from utils import ModelConfig
 
-def precompute_freqs_cis(dim, end, theta=10000.0):
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
     # theta variable is base theta, 10000 in original paper
     # theta ^ -2(i-1)/d
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
@@ -33,12 +33,12 @@ class GroupedQueryAttention(nn.Module):
     # for grouped query attention, many queries are grouped together with a single key and value matrix
     def __init__(
         self,
-        embedding_dim,
-        num_heads,
-        num_kv_heads,
-        context_length,
-        attention_dropout_p,
-        residual_dropout_p,
+        embedding_dim: int,
+        num_heads: int,
+        num_kv_heads: int,
+        context_length: int,
+        attention_dropout_p: float,
+        residual_dropout_p: float
     ):
         super().__init__()
         assert embedding_dim % num_heads == 0
@@ -64,7 +64,7 @@ class GroupedQueryAttention(nn.Module):
         self.attention_dropout_p = attention_dropout_p
         self.residual_dropout = nn.Dropout(p=residual_dropout_p)
 
-    def apply_rope(self, x, freqs_cis):
+    def apply_rope(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         batch_size, seq_length, num_heads, per_head_dim = x.size()
         # reshaping does the "division into d/2" subspaces
         # viewed as complex so you can simply multiply the complex number
@@ -81,7 +81,7 @@ class GroupedQueryAttention(nn.Module):
         x_out = x_out.reshape(batch_size, seq_length, num_heads, per_head_dim)
         return x_out
 
-    def forward(self, x, freqs_cis):
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         batch_size, seq_length, _ = x.size()
         # each q, k, v matrix is (batch size, seq_length, embedding_dim, embedding_dim) here
         # forward pass on the attention_matrices linear layer results in calculating queries, keys, values
@@ -129,17 +129,17 @@ class MultiHeadLatentAttention(nn.Module):
     # head_dim values greater than embedding_dim / num_heads
     def __init__(
         self,
-        embedding_dim,
-        num_heads,
-        num_kv_heads,
-        q_lora_rank,
-        kv_lora_rank,
-        qk_nope_head_dim,
-        qk_rope_head_dim,
-        v_head_dim,
-        context_length,
-        attention_dropout_p,
-        residual_dropout_p,
+        embedding_dim: int,
+        num_heads: int,
+        num_kv_heads: int,
+        q_lora_rank: int,
+        kv_lora_rank: int,
+        qk_nope_head_dim: int,
+        qk_rope_head_dim: int,
+        v_head_dim: int,
+        context_length: int,
+        attention_dropout_p: float,
+        residual_dropout_p: float,
     ):
         super().__init__()
         assert embedding_dim % num_heads == 0
@@ -183,7 +183,7 @@ class MultiHeadLatentAttention(nn.Module):
         self.attention_dropout_p = attention_dropout_p
         self.residual_dropout = nn.Dropout(p=residual_dropout_p)
 
-    def apply_rope(self, x, freqs_cis):
+    def apply_rope(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         batch_size, seq_length, num_heads, per_head_dim = x.size()
         # reshaping does the "division into d/2" subspaces
         # viewed as complex so you can simply multiply the complex number
@@ -200,7 +200,7 @@ class MultiHeadLatentAttention(nn.Module):
         x_out = x_out.reshape(batch_size, seq_length, num_heads, per_head_dim)
         return x_out
 
-    def forward(self, x, freqs_cis):
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         batch_size, seq_length, _ = x.size()
         Q = self.Q_a(x)
         Q = F.rms_norm(Q, (Q.size(-1),))  # low rank is normalized
@@ -261,12 +261,12 @@ class MultiHeadLatentAttention(nn.Module):
 
 class MLP(nn.Module):
     # position-wise FF layer
-    def __init__(self, model_dim, feedforward_dim):
+    def __init__(self, model_dim: int, feedforward_dim: int):
         super().__init__()
         self.to_hidden = nn.Linear(model_dim, feedforward_dim, bias=False)
         self.from_hidden = nn.Linear(feedforward_dim, model_dim, bias=False)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # dimensions of x are batch_size, seq_length, embedding_dim
         # which is also batch_size, seq_length, model_dim
         return self.from_hidden(F.relu(self.to_hidden(x)).square())
@@ -306,7 +306,7 @@ class DecoderBlock(nn.Module):
             model_dim=model_config.embedding_dim, feedforward_dim=model_config.feedforward_dim
         )
 
-    def forward(self, x, freqs_cis):
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         # should be straightforward, dimensions stay the same
         output = F.rms_norm(x, (x.size(-1),))  # last dim is embedding_dim
         output = output + self.attention_block(output, freqs_cis)
@@ -339,7 +339,7 @@ class CausalTransformer(nn.Module):
         self.lm_head = nn.Linear(model_config.embedding_dim, model_config.vocab_size, bias=False)
         nn.init.zeros_(self.lm_head.weight)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x is batch size, seq_len where each value is a token index
         output = self.embedding_layer(x)
         output = F.rms_norm(output, (output.size(-1),))

@@ -1,0 +1,17 @@
+{
+  "vocab_size": 710,
+  "num_layers": 3,
+  "embedding_dim": 512,
+  "num_heads": 16,
+  "num_kv_heads": 16,
+  "context_length": 256,
+  "feedforward_dim": 1024,
+  "attention_dropout_p": 0.05,
+  "residual_dropout_p": 0.05,
+  "q_lora_rank": 32,
+  "kv_lora_rank": 32,
+  "qk_nope_head_dim": 64,
+  "qk_rope_head_dim": 32,
+  "v_head_dim": 96,
+  "attention_type": "mla"
+}
