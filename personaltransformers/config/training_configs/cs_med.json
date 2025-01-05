@@ -1,8 +1,11 @@
 {
   "device": "mps",
-  "batch_size": 64,
-  "learning_rate": 2.5e-4,
+  "batch_size": 32,
+  "learning_rate": 1e-4,
   "lr_warmup_steps": 3000,
   "num_epochs": 1,
-  "compile": false
+  "compile": false,
+  "reporting_factor": 1000,
+  "sampling_factor": 5000,
+  "sampling_length_multiplier": 4
 }

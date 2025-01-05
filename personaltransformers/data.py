@@ -3,9 +3,11 @@ This file will contain a bunch of abstractions for simplifying interacting with 
 """
 
 import torch
-from torch.utils.data import DataLoader, Dataset
+import json
+import tiktoken
+from torch.utils.data import Dataset
 
-class TxtFileDataset(Dataset):
+class CharacterLevelDataset(Dataset):
     """
     Simple dataset to use if the whole dataset is in a text file, character-level tokenizer.
     Data is all loaded into memory.
@@ -38,3 +40,30 @@ class TxtFileDataset(Dataset):
         x = self.tokenize(self.data[index:index+self.sequence_length])
         y = self.tokenize(self.data[index+1:index+self.sequence_length+1]) # shifting x sequence by one
         return x, y
+
+class TiktokenTxtDataset(Dataset):
+    def __init__(self, file_path, sequence_length, tokenizer_name="cl100k_base"):
+        self.file_path = file_path
+        self.sequence_length = sequence_length
+
+        # Load tiktoken
+        self.tokenizer = tiktoken.get_encoding(tokenizer_name)
+
+        # Load file and tokenize all at once
+        with open(file_path, 'r') as f:
+            text = f.read()
+        self.tokens = self.tokenizer.encode(text)
+
+    def __len__(self):
+        return len(self.tokens) - self.sequence_length - 1
+
+    def __getitem__(self, idx):
+        x = self.tokens[idx : idx + self.sequence_length]
+        y = self.tokens[idx + 1 : idx + self.sequence_length + 1]
+        return torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long)
+
+    def detokenize(self, token_ids):
+        return self.tokenizer.decode(token_ids)
+
+    def get_vocab_size(self):
+        return self.tokenizer.n_vocab

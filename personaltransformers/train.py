@@ -4,11 +4,11 @@ import torch.optim.lr_scheduler as lr_scheduler
 import torch.nn.functional as F
 import argparse
 from typing import Tuple
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 
 from models import CausalTransformer
-from data import TxtFileDataset
+from data import TiktokenTxtDataset
 from inference import sample
 from utils import read_model_config, read_training_config, ModelConfig, TrainingConfig
 
@@ -20,7 +20,7 @@ def sample_and_log(
     global_step: int,
     writer: SummaryWriter,
     device: str,
-    dataset: TxtFileDataset,
+    dataset: Dataset,
     model_config: ModelConfig,
     sampling_length: int
 ) -> None:
@@ -54,9 +54,6 @@ def train(
     training_config: TrainingConfig,
     model_config: ModelConfig,
     writer: SummaryWriter,
-    reporting_factor: int,
-    sampling_factor: int,
-    sampling_length: int
 ) -> None:
     global_step: int = 0
 
@@ -88,8 +85,8 @@ def train(
             writer.add_scalar("Loss/train", loss_scalar, global_step)
             running_loss += loss_scalar
 
-            if i % reporting_factor == reporting_factor - 1:
-                last_loss = running_loss / reporting_factor
+            if i % training_config.reporting_factor == training_config.reporting_factor - 1:
+                last_loss = running_loss / training_config.reporting_factor
                 print("\n╭─ Training Progress ──────────────────")
                 print(f"│ Batch Size: {training_config.batch_size}")
                 print(f"│ Step:       {i+1}")
@@ -97,7 +94,7 @@ def train(
                 print("╰──────────────────────────────────────")
                 running_loss = 0.0
 
-            if i % sampling_factor == sampling_factor - 1:
+            if i % training_config.sampling_factor == training_config.sampling_factor - 1:
                 sample_and_log(
                     model=model,
                     global_step=global_step,
@@ -105,7 +102,7 @@ def train(
                     device=device,
                     dataset=train_loader.dataset,
                     model_config=model_config,
-                    sampling_length=sampling_length
+                    sampling_length=training_config.sampling_length_multiplier * model_config.context_length
                 )
 
 if __name__ == '__main__':
@@ -121,18 +118,14 @@ if __name__ == '__main__':
     model_config: ModelConfig = read_model_config(args.model_config)
     training_config: TrainingConfig = read_training_config(args.training_config)
 
-    REPORTING_FACTOR: int = 1000
-    SAMPLING_FACTOR: int = 5000
-    SAMPLING_LENGTH: int = 4 * model_config.context_length
-
     writer: SummaryWriter = SummaryWriter()
 
-    dataset: TxtFileDataset = TxtFileDataset(
+    dataset: TiktokenTxtDataset = TiktokenTxtDataset(
         args.dataset, model_config.context_length
     )
 
     assert dataset.get_vocab_size() == model_config.vocab_size, \
-    f"Dataset vocab size is {dataset.get_vocab_size()}, model_config vocab size is {model_config.vocab_size}"
+    f"dataset vocab size is {dataset.get_vocab_size()}, model_config vocab size is {model_config.vocab_size}"
 
     model: CausalTransformer = CausalTransformer(model_config=model_config)
 
@@ -168,9 +161,6 @@ if __name__ == '__main__':
         training_config=training_config,
         model_config=model_config,
         writer=writer,
-        reporting_factor=REPORTING_FACTOR,
-        sampling_factor=SAMPLING_FACTOR,
-        sampling_length=SAMPLING_LENGTH
     )
 
     writer.flush()

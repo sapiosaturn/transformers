@@ -28,11 +28,16 @@ class TrainingConfig:
     lr_warmup_steps: int
     num_epochs: int
     compile: bool
+    reporting_factor: int
+    sampling_factor: int
+    sampling_length_multiplier: int
 
 def read_training_config(config_path: str) -> TrainingConfig:
     with open(config_path, 'r') as file:
         config_data = json.load(file)
-        required_keys = {'device', 'batch_size', 'learning_rate', 'lr_warmup_steps', 'num_epochs', 'compile'}
+        required_keys = {'device', 'batch_size', 'learning_rate', 'lr_warmup_steps',
+                        'num_epochs', 'compile', 'reporting_factor', 'sampling_factor',
+                        'sampling_length_multiplier'}
         missing_keys = required_keys - config_data.keys()
         if missing_keys:
             raise ValueError(f"Missing configuration options in {config_path}: {', '.join(missing_keys)}")
@@ -42,7 +47,10 @@ def read_training_config(config_path: str) -> TrainingConfig:
             learning_rate=config_data['learning_rate'],
             lr_warmup_steps=config_data['lr_warmup_steps'],
             num_epochs=config_data['num_epochs'],
-            compile=config_data['compile']
+            compile=config_data['compile'],
+            reporting_factor=config_data['reporting_factor'],
+            sampling_factor=config_data['sampling_factor'],
+            sampling_length_multiplier=config_data['sampling_length_multiplier']
         )
 
 def read_model_config(config_path: str) -> ModelConfig:
