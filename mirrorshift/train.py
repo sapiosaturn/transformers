@@ -1,3 +1,7 @@
+"""
+This file contains the core training logic.
+"""
+
 import torch
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
@@ -134,8 +138,13 @@ if __name__ == '__main__':
 
     device: str
     if training_config.device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        torch.set_float32_matmul_precision("high")
+        if torch.cuda.is_available():
+            device = "cuda"
+            torch.set_float32_matmul_precision("high")
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     else:
         device = training_config.device
     model = model.to(device)

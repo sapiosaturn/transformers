@@ -1,17 +1,10 @@
 [project]
-name = "transformers"
+name = "mirrorshift"
 version = "0.1.0"
 description = "my personal repo for transformers implementations and experiments"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [
-	"torch>=2.5.1",
-	"tensorboard>=2.18.0",
-	"tiktoken>=0.8.0",
-]
+dependencies = ["torch>=2.5.1", "tensorboard>=2.18.0", "tiktoken>=0.8.0"]
 
 [dependency-groups]
-dev = [
-    "pytest>=8.3.4",
-]
-
+dev = ["pytest>=8.3.4"]

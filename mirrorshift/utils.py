@@ -1,3 +1,7 @@
+"""
+This file contains utilities for training and model configuration.
+"""
+
 import json
 from dataclasses import dataclass
 from typing import Literal

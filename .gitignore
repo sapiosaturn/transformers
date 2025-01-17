@@ -1,5 +1,6 @@
 __pycache__
 .DS_Store
-personaltransformers/runs
-personaltransformers/.DS_Store
+mirrorshift/runs
+mirrorshift/.DS_Store
 .venv
+.pytest_cache

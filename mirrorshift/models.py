@@ -1,4 +1,6 @@
 """
+This file contains the model definitions.
+
 References (code):
 - https://github.com/karpathy/minGPT
 - https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
@@ -160,20 +162,21 @@ class MultiHeadLatentAttention(nn.Module):
         self.context_length = context_length
 
         # W_Q, W_K, W_V for all attention heads
-        self.Q_a = nn.Linear(self.embedding_dim, self.q_lora_rank)
+        self.Q_a = nn.Linear(self.embedding_dim, self.q_lora_rank, bias=False)
         # note, num_heads * qk_head_dim does not have to be equal to embedding_dim
-        self.Q_b = nn.Linear(self.q_lora_rank, self.num_heads * self.qk_head_dim)
+        self.Q_b = nn.Linear(self.q_lora_rank, self.num_heads * self.qk_head_dim, bias=False)
 
         # joint down-projection to kv_lora as well as decoupled part of key for rope
         # this could be two matrices but it's done jointly
         self.KV_a = nn.Linear(
-            self.embedding_dim, self.kv_lora_rank + self.qk_rope_head_dim
+            self.embedding_dim, self.kv_lora_rank + self.qk_rope_head_dim, bias=False
         )
         # upscales for the nope part of the key and for the value
         # this could be two matrices but it's done jointly
         self.KV_b = nn.Linear(
             self.kv_lora_rank,
             self.num_kv_heads * (self.qk_nope_head_dim + self.v_head_dim),
+            bias=False
         )
         self.output_proj = nn.Linear(
             self.num_heads * self.v_head_dim, embedding_dim, bias=False

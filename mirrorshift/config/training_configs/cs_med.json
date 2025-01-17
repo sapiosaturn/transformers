@@ -1,10 +1,10 @@
 {
-  "device": "mps",
-  "batch_size": 32,
-  "learning_rate": 1e-4,
+  "device": "auto",
+  "batch_size": 16,
+  "learning_rate": 2.5e-5,
   "lr_warmup_steps": 3000,
   "num_epochs": 1,
-  "compile": false,
+  "compile": true,
   "reporting_factor": 1000,
   "sampling_factor": 5000,
   "sampling_length_multiplier": 4

@@ -1,0 +1,12 @@
+{
+  "vocab_size": 50281,
+  "num_layers": 8,
+  "embedding_dim": 512,
+  "num_heads": 8,
+  "num_kv_heads": 4,
+  "context_length": 512,
+  "feedforward_dim": 1536,
+  "attention_dropout_p": 0.0,
+  "residual_dropout_p": 0.0,
+  "attention_type": "gqa"
+}

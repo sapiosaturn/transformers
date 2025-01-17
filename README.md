@@ -1,4 +1,4 @@
-# transformers
+# mirrorshift
 personal repo for transformers code
 
 - probably not well-organized or optimized, but getting there
@@ -13,6 +13,12 @@ personal repo for transformers code
 - `config/`: JSON files for model architecture and training parameters
 
 ## Usage
+
+Clone the repository and `cd` into the folder.
+
+Run `uv sync && source .venv/bin/activate`.
+
+`cd` into the `mirrorshift` folder.
 
 To train on the tiny shakespeare dataset:
 ```python

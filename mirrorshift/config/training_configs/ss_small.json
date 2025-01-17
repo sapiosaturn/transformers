@@ -1,0 +1,11 @@
+{
+  "device": "auto",
+  "batch_size": 16,
+  "learning_rate": 2.5e-4,
+  "lr_warmup_steps": 2500,
+  "num_epochs": 1,
+  "compile": false,
+  "reporting_factor": 100,
+  "sampling_factor": 500,
+  "sampling_length_multiplier": 2
+}
