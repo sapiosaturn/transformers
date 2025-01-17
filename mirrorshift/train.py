@@ -141,7 +141,7 @@ if __name__ == '__main__':
         if torch.cuda.is_available():
             device = "cuda"
             torch.set_float32_matmul_precision("high")
-        elif torch.backends.mps.is_available():
+        elif torch.backends.mps.is_available() and not training_config.compile:
             device = "mps"
         else:
             device = "cpu"
