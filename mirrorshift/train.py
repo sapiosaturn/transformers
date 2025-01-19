@@ -63,11 +63,13 @@ def val_eval(
             x, y = val_batch
             x = x.to(device)
             y = y.to(device)
-            logits = model(x)
-            loss_value = F.cross_entropy(
-                logits.view(logits.size(0) * logits.size(1), logits.size(2)),
-                y.view(y.size(0) * y.size(1)),
-            )
+            model_dtype = next(model.parameters()).dtype
+            with torch.autocast(device_type=device, dtype=model_dtype):
+                logits = model(x)
+                loss_value = F.cross_entropy(
+                    logits.view(logits.size(0) * logits.size(1), logits.size(2)),
+                    y.view(y.size(0) * y.size(1)),
+                )
             loss_scalar = loss_value.item()
             total_val_loss += loss_scalar
             val_batches += 1
