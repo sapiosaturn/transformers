@@ -8,7 +8,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 import torch.nn.functional as F
 import argparse
 from typing import Tuple
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 
 from models import CausalTransformer
@@ -24,7 +24,7 @@ def sample_and_log(
     global_step: int,
     writer: SummaryWriter,
     device: str,
-    dataset: Dataset,
+    subset: Subset,
     model_config: ModelConfig,
     sampling_length: int
 ) -> None:
@@ -38,7 +38,7 @@ def sample_and_log(
         num_tokens=sampling_length,
         context_length=model_config.context_length,
         device=device,
-        dataset=dataset,
+        subset=subset
     )
     print("\n╭─ Generated Text Sample ──────────────")
     print("│")
@@ -49,9 +49,47 @@ def sample_and_log(
     writer.add_text("Sampled Text", generated_text, global_step)
     model.train()
 
+def val_eval(
+    model: CausalTransformer,
+    writer: SummaryWriter,
+    global_step: int,
+    val_loader: DataLoader,
+    device: str,
+) -> None:
+    model.eval()
+    total_val_loss = 0.0
+    val_batches = 0
+    with torch.no_grad():
+        for val_batch in val_loader:
+            x, y = val_batch
+            x = x.to(device)
+            y = y.to(device)
+            logits = model(x)
+            loss_value = F.cross_entropy(
+                logits.view(logits.size(0) * logits.size(1), logits.size(2)),
+                y.view(y.size(0) * y.size(1)),
+            )
+            loss_scalar = loss_value.item()
+            total_val_loss += loss_scalar
+            val_batches += 1
+    avg_val_loss = total_val_loss/val_batches
+    writer.add_scalar("Loss/val", avg_val_loss, global_step)
+
+    val_perplexity = torch.exp(torch.tensor(avg_val_loss)).item()
+    writer.add_scalar("Perplexity/val", val_perplexity, global_step)
+
+    print("\n╭─ Validation Metrics ─────────────────")
+    print(f"│ Step:                  {global_step}")
+    print(f"│ Validation Loss:       {avg_val_loss:.5f}")
+    print(f"│ Validation Perplexity: {val_perplexity:.5f}")
+    print("╰──────────────────────────────────────")
+
+    model.train()
+
 def train(
     model: CausalTransformer,
     train_loader: DataLoader,
+    val_loader: DataLoader,
     opt: optim.AdamW,
     scheduler: lr_scheduler.LinearLR,
     device: str,
@@ -87,29 +125,46 @@ def train(
 
             loss_scalar = loss_value.item()
             writer.add_scalar("Loss/train", loss_scalar, global_step)
+            writer.add_scalar(
+                "Perplexity/train",
+                torch.exp(torch.tensor(loss_scalar)).item(),
+                global_step
+            )
             running_loss += loss_scalar
 
-            if i % training_config.reporting_factor == training_config.reporting_factor - 1:
-                last_loss = running_loss / training_config.reporting_factor
+            if i % training_config.reporting_steps == training_config.reporting_steps - 1:
+                last_loss = running_loss / training_config.reporting_steps
+                last_perplexity = torch.exp(torch.tensor(last_loss)).item()
                 print("\n╭─ Training Progress ──────────────────")
                 print(f"│ Batch Size: {training_config.batch_size}")
                 print(f"│ Step:       {i+1}")
                 print(f"│ Loss:       {last_loss:.5f}")
+                print(f"│ Perplexity: {last_perplexity:.5f}")
                 print("╰──────────────────────────────────────")
                 running_loss = 0.0
 
-            if i % training_config.sampling_factor == training_config.sampling_factor - 1:
+            if i % training_config.validation_eval_steps == training_config.validation_eval_steps - 1:
+                val_eval(
+                    model=model,
+                    writer=writer,
+                    global_step=global_step,
+                    val_loader=val_loader,
+                    device=device
+                )
+
+            if i % training_config.sampling_steps == training_config.sampling_steps - 1:
                 sample_and_log(
                     model=model,
                     global_step=global_step,
                     writer=writer,
                     device=device,
-                    dataset=train_loader.dataset,
+                    subset=train_loader.dataset,
                     model_config=model_config,
                     sampling_length=training_config.sampling_length_multiplier * model_config.context_length
                 )
 
 if __name__ == '__main__':
+    # default values are for toy model with shakespeare dataset
     parser = argparse.ArgumentParser()
     parser.add_argument('--model-config', type=str, default='config/model_configs/ss_small.json',
                       help='Path to model configuration file')
@@ -124,17 +179,24 @@ if __name__ == '__main__':
 
     writer: SummaryWriter = SummaryWriter()
 
-    dataset: TiktokenTxtDataset = TiktokenTxtDataset(
+    full_dataset: TiktokenTxtDataset = TiktokenTxtDataset(
         args.dataset, model_config.context_length
     )
 
-    assert dataset.get_vocab_size() == model_config.vocab_size, \
-    f"dataset vocab size is {dataset.get_vocab_size()}, model_config vocab size is {model_config.vocab_size}"
+    # this is mainly useful with char-level tokenizers
+    assert full_dataset.get_vocab_size() == model_config.vocab_size, \
+    f"dataset vocab size is {full_dataset.get_vocab_size()}, model_config vocab size is {model_config.vocab_size}"
+
+    train_size = int(len(full_dataset) * (1-training_config.validation_split))
+    val_size = len(full_dataset) - train_size
+
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        dataset=full_dataset,
+        lengths=[train_size, val_size],
+        generator=torch.Generator()
+    )
 
     model: CausalTransformer = CausalTransformer(model_config=model_config)
-
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"model has {trainable_params} trainable parameters")
 
     device: str
     if training_config.device == "auto":
@@ -148,7 +210,6 @@ if __name__ == '__main__':
     else:
         device = training_config.device
     model = model.to(device)
-    print("running on device: ", device)
 
     opt: optim.AdamW = optim.AdamW(model.parameters(), lr=training_config.learning_rate)
     scheduler: lr_scheduler.LinearLR = lr_scheduler.LinearLR(
@@ -158,12 +219,26 @@ if __name__ == '__main__':
     model = torch.compile(model) if training_config.compile else model
 
     train_loader: DataLoader = DataLoader(
-        dataset, batch_size=training_config.batch_size, shuffle=True
+        train_dataset, batch_size=training_config.batch_size, shuffle=True
     )
+    val_loader: DataLoader = DataLoader(
+        val_dataset, batch_size=training_config.batch_size, shuffle=False
+    )
+
+    trainable_params: int = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    print("\n╭─ Training Info ──────────────────────")
+    print(f"│ Total dataset size:   {len(full_dataset)}")
+    print(f"│ Trainable parameters: {trainable_params}")
+    print(f"│ Training set size:    {len(train_dataset)}")
+    print(f"│ Training on device:   {device}")
+    print(f"│ Validation set size:  {len(val_dataset)}")
+    print(  "╰──────────────────────────────────────")
 
     train(
         model=model,
         train_loader=train_loader,
+        val_loader=val_loader,
         opt=opt,
         scheduler=scheduler,
         device=device,

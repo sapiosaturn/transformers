@@ -7,6 +7,7 @@ References (code):
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data import Subset
 
 def top_p_filter(probs: torch.Tensor, top_p: float) -> torch.Tensor:
     # keep the most probable tokens such that the probs sum to top_p
@@ -33,7 +34,7 @@ def min_p_filter(probs: torch.Tensor, min_p: float) -> torch.Tensor:
     threshold = max_prob * min_p
     return torch.where(probs >= threshold, probs, 0.0)
 
-def sample(model: torch.nn.Module, context: torch.Tensor, num_tokens: int, dataset, context_length: int, temperature: float=1.0, top_p: float=0.95, min_p: float=0.1, device: str="cpu"):
+def sample(model: torch.nn.Module, context: torch.Tensor, num_tokens: int, subset: Subset, context_length: int, temperature: float=1.0, top_p: float=0.95, min_p: float=0.1, device: str="cpu"):
     context = context.to(device)
     generated_tokens = context
 
@@ -54,6 +55,6 @@ def sample(model: torch.nn.Module, context: torch.Tensor, num_tokens: int, datas
 
     generated_tokens = generated_tokens[0].cpu().tolist()
     generated_text = None
-    generated_text = dataset.detokenize(generated_tokens)
+    generated_text = subset.dataset.detokenize(generated_tokens)
 
     return generated_tokens, generated_text
