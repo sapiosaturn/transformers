@@ -1,8 +1,9 @@
 {
   "device": "auto",
   "batch_size": 16,
-  "learning_rate": 1e-2,
-  "lr_warmup_steps": 2500,
+  "learning_rate": 5e-3,
+  "lr_warmup_steps": 250,
+  "lr_schedule": "wsd_exponential_decay",
   "num_epochs": 1,
   "compile": false,
   "reporting_steps": 100,

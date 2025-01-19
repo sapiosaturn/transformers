@@ -2,10 +2,13 @@
   "device": "auto",
   "batch_size": 16,
   "learning_rate": 2.5e-5,
-  "lr_warmup_steps": 3000,
+  "lr_warmup_steps": 300,
+  "lr_schedule": "wsd_exponential_decay",
   "num_epochs": 1,
   "compile": true,
-  "reporting_factor": 1000,
-  "sampling_factor": 5000,
-  "sampling_length_multiplier": 4
+  "reporting_steps": 1000,
+  "sampling_steps": 10000,
+  "sampling_length_multiplier": 4,
+  "validation_split": 0.05,
+  "validation_eval_steps": 10000
 }

@@ -4,7 +4,6 @@ This file contains the core training logic.
 
 import torch
 import torch.optim as optim
-import torch.optim.lr_scheduler as lr_scheduler
 import torch.nn.functional as F
 import argparse
 from typing import Tuple
@@ -14,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from models import CausalTransformer
 from data import TiktokenTxtDataset
 from inference import sample
-from utils import read_model_config, read_training_config, ModelConfig, TrainingConfig
+from utils import read_model_config, read_training_config, ModelConfig, TrainingConfig, get_lr_schedule
 
 BatchType = Tuple[torch.Tensor, torch.Tensor]
 Logits = torch.Tensor
@@ -91,13 +90,22 @@ def train(
     train_loader: DataLoader,
     val_loader: DataLoader,
     opt: optim.AdamW,
-    scheduler: lr_scheduler.LinearLR,
     device: str,
     training_config: TrainingConfig,
     model_config: ModelConfig,
     writer: SummaryWriter,
 ) -> None:
     global_step: int = 0
+
+    steps_per_epoch = len(train_loader.dataset) // training_config.batch_size
+    total_steps = steps_per_epoch * training_config.num_epochs
+
+    lr_schedule = get_lr_schedule(
+        schedule=training_config.lr_schedule,
+        max_lr=training_config.learning_rate,
+        warmup_steps=training_config.lr_warmup_steps,
+        total_steps=total_steps
+    )
 
     for e in range(training_config.num_epochs):
         print("\n╭─ Starting Epoch ─────────────────────")
@@ -112,6 +120,11 @@ def train(
             x = x.to(device)
             y = y.to(device)
             opt.zero_grad()
+
+            for param_group in opt.param_groups:
+                param_group['lr'] = lr_schedule(global_step)
+            writer.add_scalar("Learning Rate", opt.param_groups[0]['lr'], global_step)
+
             logits: Logits = model(x)
 
             loss_value = F.cross_entropy(
@@ -120,8 +133,6 @@ def train(
             )
             loss_value.backward()
             opt.step()
-            scheduler.step()
-            global_step += 1
 
             loss_scalar = loss_value.item()
             writer.add_scalar("Loss/train", loss_scalar, global_step)
@@ -132,7 +143,7 @@ def train(
             )
             running_loss += loss_scalar
 
-            if i % training_config.reporting_steps == training_config.reporting_steps - 1:
+            if global_step % training_config.reporting_steps == training_config.reporting_steps - 1:
                 last_loss = running_loss / training_config.reporting_steps
                 last_perplexity = torch.exp(torch.tensor(last_loss)).item()
                 print("\n╭─ Training Progress ──────────────────")
@@ -143,7 +154,7 @@ def train(
                 print("╰──────────────────────────────────────")
                 running_loss = 0.0
 
-            if i % training_config.validation_eval_steps == training_config.validation_eval_steps - 1:
+            if global_step % training_config.validation_eval_steps == training_config.validation_eval_steps - 1:
                 val_eval(
                     model=model,
                     writer=writer,
@@ -152,7 +163,7 @@ def train(
                     device=device
                 )
 
-            if i % training_config.sampling_steps == training_config.sampling_steps - 1:
+            if global_step % training_config.sampling_steps == training_config.sampling_steps - 1:
                 sample_and_log(
                     model=model,
                     global_step=global_step,
@@ -162,6 +173,8 @@ def train(
                     model_config=model_config,
                     sampling_length=training_config.sampling_length_multiplier * model_config.context_length
                 )
+
+            global_step += 1
 
 if __name__ == '__main__':
     # default values are for toy model with shakespeare dataset
@@ -212,9 +225,6 @@ if __name__ == '__main__':
     model = model.to(device)
 
     opt: optim.AdamW = optim.AdamW(model.parameters(), lr=training_config.learning_rate)
-    scheduler: lr_scheduler.LinearLR = lr_scheduler.LinearLR(
-        opt, 0.1, 1, training_config.lr_warmup_steps
-    )
 
     model = torch.compile(model) if training_config.compile else model
 
@@ -240,7 +250,6 @@ if __name__ == '__main__':
         train_loader=train_loader,
         val_loader=val_loader,
         opt=opt,
-        scheduler=scheduler,
         device=device,
         training_config=training_config,
         model_config=model_config,
