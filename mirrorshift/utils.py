@@ -2,6 +2,7 @@
 This file contains utilities for training and model configuration.
 """
 
+import torch
 import json
 import math
 from dataclasses import dataclass
@@ -150,3 +151,18 @@ def get_lr_schedule(
         raise ValueError(f"Unknown schedule name: {schedule}")
 
     return lr_schedule
+
+def get_supported_dtype(device: str) -> torch.dtype:
+        if device == "cuda":
+            if torch.cuda.is_bf16_supported():
+                print("INFO: Using bfloat16 precision")
+                return torch.bfloat16
+        elif device == "cpu":
+            if torch.cpu.is_bf16_supported():
+                print("INFO: Using bfloat16 precision")
+                return torch.bfloat16
+        elif device == "mps":
+            print("INFO: Using bfloat16 precision")
+            return torch.bfloat16
+        print("INFO: bfloat16 not supported on this device, falling back to float32")
+        return torch.float32

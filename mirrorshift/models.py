@@ -71,16 +71,18 @@ class GroupedQueryAttention(nn.Module):
         # reshaping does the "division into d/2" subspaces
         # viewed as complex so you can simply multiply the complex number
         # x+iy by the precomputed cos theta + i sin theta, rotating vector (x,y) by theta
-        x_complex = torch.view_as_complex(
-            x.reshape(batch_size, seq_length, num_heads, per_head_dim // 2, 2)
-        )
-        freqs_cis = freqs_cis[:seq_length].view(
-            1, seq_length, 1, per_head_dim // 2
-        )  # flatten for multiply
-        x_rotated = x_complex * freqs_cis
-        # reshape back to normal
-        x_out = torch.view_as_real(x_rotated)
-        x_out = x_out.reshape(batch_size, seq_length, num_heads, per_head_dim)
+        with torch.autocast(device_type=x.device.type, dtype=torch.float32):
+            x = x.to(torch.float32) # MPS does not autocast to float32
+            x_complex = torch.view_as_complex(
+                x.reshape(batch_size, seq_length, num_heads, per_head_dim // 2, 2)
+            )
+            freqs_cis = freqs_cis[:seq_length].view(
+                1, seq_length, 1, per_head_dim // 2
+            )  # flatten for multiply
+            x_rotated = x_complex * freqs_cis
+            # reshape back to normal
+            x_out = torch.view_as_real(x_rotated)
+            x_out = x_out.reshape(batch_size, seq_length, num_heads, per_head_dim)
         return x_out
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
@@ -97,20 +99,21 @@ class GroupedQueryAttention(nn.Module):
         V = V.view(
             batch_size, seq_length, self.num_kv_heads, self.per_head_dim
         ).transpose(1, 2)
-        Q = F.rms_norm(Q, (Q.size(-1),))
-        K = F.rms_norm(K, (K.size(-1),))
-        Q = self.apply_rope(Q, freqs_cis).transpose(1, 2)
-        K = self.apply_rope(K, freqs_cis).transpose(1, 2)
 
-        # calling efficient attention kernel
-        output = F.scaled_dot_product_attention(
-            query=Q,
-            key=K,
-            value=V,
-            dropout_p=self.attention_dropout_p,
-            is_causal=True,
-            enable_gqa=True,
-        )
+        with torch.autocast(device_type=x.device.type, dtype=torch.float32):
+            Q = F.rms_norm(Q, (Q.size(-1),))
+            K = F.rms_norm(K, (K.size(-1),))
+            Q = self.apply_rope(Q, freqs_cis).transpose(1, 2)
+            K = self.apply_rope(K, freqs_cis).transpose(1, 2)
+            V = V.to(torch.float32) # MPS does not autocast to float32
+            output = F.scaled_dot_product_attention(
+                query=Q,
+                key=K,
+                value=V,
+                dropout_p=self.attention_dropout_p,
+                is_causal=True,
+                enable_gqa=True,
+            )
 
         # transpose to move num_heads back to original dim and then recombine
         output = (
@@ -191,16 +194,18 @@ class MultiHeadLatentAttention(nn.Module):
         # reshaping does the "division into d/2" subspaces
         # viewed as complex so you can simply multiply the complex number
         # x+iy by the precomputed cos theta + i sin theta, rotating vector (x,y) by theta
-        x_complex = torch.view_as_complex(
-            x.reshape(batch_size, seq_length, num_heads, per_head_dim // 2, 2)
-        )
-        freqs_cis = freqs_cis[:seq_length].view(
-            1, seq_length, 1, per_head_dim // 2
-        )  # flatten for multiply
-        x_rotated = x_complex * freqs_cis
-        # reshape back to normal
-        x_out = torch.view_as_real(x_rotated)
-        x_out = x_out.reshape(batch_size, seq_length, num_heads, per_head_dim)
+        with torch.autocast(device_type=x.device.type, dtype=torch.float32):
+            x = x.to(torch.float32) # MPS does not autocast to float32
+            x_complex = torch.view_as_complex(
+                x.reshape(batch_size, seq_length, num_heads, per_head_dim // 2, 2)
+            )
+            freqs_cis = freqs_cis[:seq_length].view(
+                1, seq_length, 1, per_head_dim // 2
+            )  # flatten for multiply
+            x_rotated = x_complex * freqs_cis
+            # reshape back to normal
+            x_out = torch.view_as_real(x_rotated)
+            x_out = x_out.reshape(batch_size, seq_length, num_heads, per_head_dim)
         return x_out
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
@@ -242,15 +247,16 @@ class MultiHeadLatentAttention(nn.Module):
         k_nope, v = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
         k = torch.cat([k_nope, k_rope], dim=-1)
 
-        # calling efficient attention kernel
-        output = F.scaled_dot_product_attention(
-            query=Q,
-            key=k,
-            value=v,
-            dropout_p=self.attention_dropout_p,
-            is_causal=True,
-            enable_gqa=True,
-        )
+        with torch.autocast(device_type=x.device.type, dtype=torch.float32):
+            v = v.to(torch.float32) # MPS does not autocast to float32
+            output = F.scaled_dot_product_attention(
+                query=Q,
+                key=k,
+                value=v,
+                dropout_p=self.attention_dropout_p,
+                is_causal=True,
+                enable_gqa=True,
+            )
 
         # transpose to move num_heads back to original dim and then recombine
         output = (
@@ -351,3 +357,13 @@ class CausalTransformer(nn.Module):
         output = F.rms_norm(output, (output.size(-1),))
         output = self.lm_head(output)
         return output
+
+    def to(self, *args, **kwargs):
+        # this override is used to make sure freqs_cis, which is complex,
+        # does not get cast to bf16
+        freqs_cis = self.freqs_cis
+        self._buffers.pop('freqs_cis')
+        model = super().to(*args, **kwargs)
+        device = next(self.parameters()).device
+        self.register_buffer("freqs_cis", freqs_cis.to(device))
+        return model

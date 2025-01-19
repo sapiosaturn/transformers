@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from models import CausalTransformer
 from data import TiktokenTxtDataset
 from inference import sample
-from utils import read_model_config, read_training_config, ModelConfig, TrainingConfig, get_lr_schedule
+from utils import read_model_config, read_training_config, ModelConfig, TrainingConfig, get_lr_schedule, get_supported_dtype
 
 BatchType = Tuple[torch.Tensor, torch.Tensor]
 Logits = torch.Tensor
@@ -125,12 +125,14 @@ def train(
                 param_group['lr'] = lr_schedule(global_step)
             writer.add_scalar("Learning Rate", opt.param_groups[0]['lr'], global_step)
 
-            logits: Logits = model(x)
+            model_dtype = next(model.parameters()).dtype
+            with torch.autocast(device_type=device, dtype=model_dtype):
+                logits: Logits = model(x)
+                loss_value = F.cross_entropy(
+                    logits.view(logits.size(0) * logits.size(1), logits.size(2)),
+                    y.view(y.size(0) * y.size(1)),
+                )
 
-            loss_value = F.cross_entropy(
-                logits.view(logits.size(0) * logits.size(1), logits.size(2)),
-                y.view(y.size(0) * y.size(1)),
-            )
             loss_value.backward()
             opt.step()
 
@@ -222,7 +224,9 @@ if __name__ == '__main__':
             device = "cpu"
     else:
         device = training_config.device
-    model = model.to(device)
+
+    dtype = get_supported_dtype(device)
+    model = model.to(device, dtype=dtype)
 
     opt: optim.AdamW = optim.AdamW(model.parameters(), lr=training_config.learning_rate)
 
