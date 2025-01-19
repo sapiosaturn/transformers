@@ -216,7 +216,7 @@ if __name__ == '__main__':
         if torch.cuda.is_available():
             device = "cuda"
             torch.set_float32_matmul_precision("high")
-        elif torch.backends.mps.is_available() and not training_config.compile:
+        elif torch.backends.mps.is_available():
             device = "mps"
         else:
             device = "cpu"
@@ -226,7 +226,11 @@ if __name__ == '__main__':
 
     opt: optim.AdamW = optim.AdamW(model.parameters(), lr=training_config.learning_rate)
 
-    model = torch.compile(model) if training_config.compile else model
+    if training_config.compile:
+        if device == "mps":
+            print("INFO: torch.compile not compatible with device mps, choosing not to compile")
+        else:
+            model = torch.compile(model)
 
     train_loader: DataLoader = DataLoader(
         train_dataset, batch_size=training_config.batch_size, shuffle=True

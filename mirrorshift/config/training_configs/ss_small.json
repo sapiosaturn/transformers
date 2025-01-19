@@ -5,7 +5,7 @@
   "lr_warmup_steps": 250,
   "lr_schedule": "wsd_exponential",
   "num_epochs": 1,
-  "compile": false,
+  "compile": true,
   "reporting_steps": 100,
   "sampling_steps": 500,
   "sampling_length_multiplier": 2,
