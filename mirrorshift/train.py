@@ -31,14 +31,16 @@ def sample_and_log(
     random_token = torch.randint(
         low=0, high=model_config.vocab_size, size=(1, 1)
     )
-    tokens, generated_text = sample(
-        model=model,
-        context=random_token,
-        num_tokens=sampling_length,
-        context_length=model_config.context_length,
-        device=device,
-        subset=subset
-    )
+    model_dtype = next(model.parameters()).dtype
+    with torch.autocast(device_type=device, dtype=model_dtype):
+        tokens, generated_text = sample(
+            model=model,
+            context=random_token,
+            num_tokens=sampling_length,
+            context_length=model_config.context_length,
+            device=device,
+            subset=subset
+        )
     print("\n╭─ Generated Text Sample ──────────────")
     print("│")
     for line in generated_text.split('\n'):
