@@ -5,15 +5,32 @@ This file contains the core training logic.
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
+import torch.distributed as dist
 import argparse
 from typing import Tuple
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import (
+    DataLoader,
+    DistributedSampler,
+    Subset
+)
 from torch.utils.tensorboard import SummaryWriter
 
 from models import CausalTransformer
 from data import TiktokenTxtDataset
 from inference import sample
-from utils import read_model_config, read_training_config, ModelConfig, TrainingConfig, get_lr_schedule, get_supported_dtype
+from utils import (
+    read_model_config,
+    read_training_config,
+    ModelConfig,
+    TrainingConfig,
+    get_lr_schedule,
+    get_supported_dtype
+)
+from distributed import (
+    setup_distributed,
+    fsdp_wrap,
+    cleanup_distributed
+)
 
 BatchType = Tuple[torch.Tensor, torch.Tensor]
 Logits = torch.Tensor
@@ -75,17 +92,17 @@ def val_eval(
             loss_scalar = loss_value.item()
             total_val_loss += loss_scalar
             val_batches += 1
-    avg_val_loss = total_val_loss/val_batches
-    writer.add_scalar("Loss/val", avg_val_loss, global_step)
+    if dist.get_rank() == 0:
+        avg_val_loss = total_val_loss/val_batches
+        writer.add_scalar("Loss/val", avg_val_loss, global_step)
+        val_perplexity = torch.exp(torch.tensor(avg_val_loss)).item()
+        writer.add_scalar("Perplexity/val", val_perplexity, global_step)
 
-    val_perplexity = torch.exp(torch.tensor(avg_val_loss)).item()
-    writer.add_scalar("Perplexity/val", val_perplexity, global_step)
-
-    print("\n╭─ Validation Metrics ─────────────────")
-    print(f"│ Step:                  {global_step}")
-    print(f"│ Validation Loss:       {avg_val_loss:.5f}")
-    print(f"│ Validation Perplexity: {val_perplexity:.5f}")
-    print("╰──────────────────────────────────────")
+        print("\n╭─ Validation Metrics ─────────────────")
+        print(f"│ Step:                  {global_step}")
+        print(f"│ Validation Loss:       {avg_val_loss:.5f}")
+        print(f"│ Validation Perplexity: {val_perplexity:.5f}")
+        print("╰──────────────────────────────────────")
 
     model.train()
 
@@ -112,10 +129,16 @@ def train(
     )
 
     for e in range(training_config.num_epochs):
-        print("\n╭─ Starting Epoch ─────────────────────")
-        print(f"│ Epoch: {e}")
-        print("╰──────────────────────────────────────")
+        train_loader.sampler.set_epoch(e)
+        val_loader.sampler.set_epoch(e)
+
+        if dist.get_rank() == 0:
+            print("\n╭─ Starting Epoch ─────────────────────")
+            print(f"│ Epoch: {e}")
+            print("╰──────────────────────────────────────")
+
         running_loss: float = 0.0
+
         for i, batch in enumerate(train_loader):
             x: torch.Tensor
             y: torch.Tensor
@@ -127,7 +150,9 @@ def train(
 
             for param_group in opt.param_groups:
                 param_group['lr'] = lr_schedule(global_step)
-            writer.add_scalar("Learning Rate", opt.param_groups[0]['lr'], global_step)
+
+            if dist.get_rank() == 0:
+                writer.add_scalar("Learning Rate", opt.param_groups[0]['lr'], global_step)
 
             model_dtype = next(model.parameters()).dtype
             with torch.autocast(device_type=device, dtype=model_dtype):
@@ -141,23 +166,26 @@ def train(
             opt.step()
 
             loss_scalar = loss_value.item()
-            writer.add_scalar("Loss/train", loss_scalar, global_step)
-            writer.add_scalar(
-                "Perplexity/train",
-                torch.exp(torch.tensor(loss_scalar)).item(),
-                global_step
-            )
-            running_loss += loss_scalar
 
-            if global_step % training_config.reporting_steps == training_config.reporting_steps - 1:
-                last_loss = running_loss / training_config.reporting_steps
-                last_perplexity = torch.exp(torch.tensor(last_loss)).item()
-                print("\n╭─ Training Progress ──────────────────")
-                print(f"│ Batch Size: {training_config.batch_size}")
-                print(f"│ Step:       {i+1}")
-                print(f"│ Loss:       {last_loss:.5f}")
-                print(f"│ Perplexity: {last_perplexity:.5f}")
-                print("╰──────────────────────────────────────")
+            if dist.get_rank() == 0:
+                writer.add_scalar("Loss/train", loss_scalar, global_step)
+                writer.add_scalar(
+                    "Perplexity/train",
+                    torch.exp(torch.tensor(loss_scalar)).item(),
+                    global_step
+                )
+                running_loss += loss_scalar
+
+            if dist.get_rank() == 0:
+                if global_step % training_config.reporting_steps == training_config.reporting_steps - 1:
+                    last_loss = running_loss / training_config.reporting_steps
+                    last_perplexity = torch.exp(torch.tensor(last_loss)).item()
+                    print("\n╭─ Training Progress ──────────────────")
+                    print(f"│ Batch Size: {training_config.batch_size}")
+                    print(f"│ Step:       {i+1}")
+                    print(f"│ Loss:       {last_loss:.5f}")
+                    print(f"│ Perplexity: {last_perplexity:.5f}")
+                    print("╰──────────────────────────────────────")
                 running_loss = 0.0
 
             if global_step % training_config.validation_eval_steps == training_config.validation_eval_steps - 1:
@@ -169,16 +197,17 @@ def train(
                     device=device
                 )
 
-            if global_step % training_config.sampling_steps == training_config.sampling_steps - 1:
-                sample_and_log(
-                    model=model,
-                    global_step=global_step,
-                    writer=writer,
-                    device=device,
-                    subset=train_loader.dataset,
-                    model_config=model_config,
-                    sampling_length=training_config.sampling_length_multiplier * model_config.context_length
-                )
+            if dist.get_rank() == 0:
+                if global_step % training_config.sampling_steps == training_config.sampling_steps - 1:
+                    sample_and_log(
+                        model=model,
+                        global_step=global_step,
+                        writer=writer,
+                        device=device,
+                        subset=train_loader.dataset,
+                        model_config=model_config,
+                        sampling_length=training_config.sampling_length_multiplier * model_config.context_length
+                    )
 
             global_step += 1
 
@@ -196,7 +225,11 @@ if __name__ == '__main__':
     model_config: ModelConfig = read_model_config(args.model_config)
     training_config: TrainingConfig = read_training_config(args.training_config)
 
-    writer: SummaryWriter = SummaryWriter()
+    setup_distributed()
+
+    writer: SummaryWriter
+    if dist.get_rank() == 0:
+        writer = SummaryWriter()
 
     full_dataset: TiktokenTxtDataset = TiktokenTxtDataset(
         args.dataset, model_config.context_length
@@ -215,7 +248,8 @@ if __name__ == '__main__':
         generator=torch.Generator()
     )
 
-    model: CausalTransformer = CausalTransformer(model_config=model_config)
+    model = CausalTransformer(model_config=model_config)
+    model = fsdp_wrap(model)
 
     device: str
     if training_config.device == "auto":
@@ -230,7 +264,7 @@ if __name__ == '__main__':
         device = training_config.device
 
     dtype = get_supported_dtype(device)
-    model = model.to(device, dtype=dtype)
+    # model = model.to(device, dtype=dtype)
 
     opt: optim.AdamW = optim.AdamW(model.parameters(), lr=training_config.learning_rate)
 
@@ -240,22 +274,29 @@ if __name__ == '__main__':
         else:
             model = torch.compile(model)
 
+    train_sampler = DistributedSampler(train_dataset)
+    val_sampler = DistributedSampler(val_dataset)
     train_loader: DataLoader = DataLoader(
-        train_dataset, batch_size=training_config.batch_size, shuffle=True
+        train_dataset,
+        batch_size=training_config.batch_size,
+        sampler=train_sampler
     )
     val_loader: DataLoader = DataLoader(
-        val_dataset, batch_size=training_config.batch_size, shuffle=False
+        val_dataset,
+        batch_size=training_config.batch_size,
+        shuffle=False,
+        sampler=val_sampler
     )
 
-    trainable_params: int = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    print("\n╭─ Training Info ──────────────────────")
-    print(f"│ Total dataset size:   {len(full_dataset)}")
-    print(f"│ Trainable parameters: {trainable_params}")
-    print(f"│ Training set size:    {len(train_dataset)}")
-    print(f"│ Training on device:   {device}")
-    print(f"│ Validation set size:  {len(val_dataset)}")
-    print(  "╰──────────────────────────────────────")
+    if dist.get_rank() == 0:
+        trainable_params: int = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print("\n╭─ Training Info ──────────────────────")
+        print(f"│ Total dataset size:   {len(full_dataset)}")
+        print(f"│ Trainable parameters: {trainable_params}")
+        print(f"│ Training set size:    {len(train_dataset)}")
+        print(f"│ Training on device:   {device}")
+        print(f"│ Validation set size:  {len(val_dataset)}")
+        print(  "╰──────────────────────────────────────")
 
     train(
         model=model,
@@ -268,4 +309,8 @@ if __name__ == '__main__':
         writer=writer,
     )
 
-    writer.flush()
+    if dist.get_rank() == 0:
+        writer.flush()
+
+    cleanup_distributed()
+
