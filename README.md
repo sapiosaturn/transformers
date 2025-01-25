@@ -20,12 +20,19 @@ Run `uv sync && source .venv/bin/activate`.
 
 `cd` into the `mirrorshift` folder.
 
-To train on the tiny shakespeare dataset:
-```python
-python train.py --model-config config/model_configs/ss_small.json \
-                --training-config config/training_configs/ss_small.json \
-                --dataset ./datasets/tinyshakespeare.txt
+To train a tiny model on the coqa_stories dataset:
+```bash
+python train.py --model-config config/model_configs/small.json \
+                --training-config config/training_configs/small.json \
+                --dataset datasets/coqa_stories.txt
 ```
+or just `python train.py`, since the above arguments are the default values.
+
+To run on multiple GPUs:
+```bash
+torchrun --nproc_per_node=<number of GPUs> train.py
+```
+with any additional arguments (like above) as needed.
 
 Visualize training with tensorboard (loss curves and text samples are saved):
 ```bash

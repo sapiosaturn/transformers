@@ -7,11 +7,14 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torch.distributed as dist
 import argparse
+import os
 from typing import Tuple
 from torch.utils.data import (
     DataLoader,
     DistributedSampler,
-    Subset
+    Subset,
+    RandomSampler,
+    SequentialSampler
 )
 from torch.utils.tensorboard import SummaryWriter
 
@@ -92,7 +95,7 @@ def val_eval(
             loss_scalar = loss_value.item()
             total_val_loss += loss_scalar
             val_batches += 1
-    if dist.get_rank() == 0:
+    if not is_distributed() or dist.get_rank() == 0:
         avg_val_loss = total_val_loss/val_batches
         writer.add_scalar("Loss/val", avg_val_loss, global_step)
         val_perplexity = torch.exp(torch.tensor(avg_val_loss)).item()
@@ -117,6 +120,7 @@ def train(
     writer: SummaryWriter,
 ) -> None:
     global_step: int = 0
+    world_size = dist.get_world_size() if is_distributed() else 1
 
     steps_per_epoch = len(train_loader.dataset) // training_config.batch_size
     total_steps = steps_per_epoch * training_config.num_epochs
@@ -129,10 +133,11 @@ def train(
     )
 
     for e in range(training_config.num_epochs):
-        train_loader.sampler.set_epoch(e)
-        val_loader.sampler.set_epoch(e)
+        if is_distributed():
+            train_loader.sampler.set_epoch(e)
+            val_loader.sampler.set_epoch(e)
 
-        if dist.get_rank() == 0:
+        if not is_distributed() or dist.get_rank() == 0:
             print("\n╭─ Starting Epoch ─────────────────────")
             print(f"│ Epoch: {e}")
             print("╰──────────────────────────────────────")
@@ -151,7 +156,7 @@ def train(
             for param_group in opt.param_groups:
                 param_group['lr'] = lr_schedule(global_step)
 
-            if dist.get_rank() == 0:
+            if not is_distributed() or dist.get_rank() == 0:
                 writer.add_scalar("Learning Rate", opt.param_groups[0]['lr'], global_step)
 
             model_dtype = next(model.parameters()).dtype
@@ -163,11 +168,11 @@ def train(
                 )
 
             loss_value.backward()
-            opt.step()
-
             loss_scalar = loss_value.item()
+            opt.step()
+            global_step += world_size
 
-            if dist.get_rank() == 0:
+            if not is_distributed() or dist.get_rank() == 0:
                 writer.add_scalar("Loss/train", loss_scalar, global_step)
                 writer.add_scalar(
                     "Perplexity/train",
@@ -176,19 +181,21 @@ def train(
                 )
                 running_loss += loss_scalar
 
-            if dist.get_rank() == 0:
-                if global_step % training_config.reporting_steps == training_config.reporting_steps - 1:
-                    last_loss = running_loss / training_config.reporting_steps
+            if not is_distributed() or dist.get_rank() == 0:
+                if global_step % training_config.reporting_steps == 0:
+                    # just a note, dividing by world size because losses only
+                    # accumulated for logging on first GPU, so not all "steps" count
+                    last_loss = running_loss / (training_config.reporting_steps/world_size)
                     last_perplexity = torch.exp(torch.tensor(last_loss)).item()
                     print("\n╭─ Training Progress ──────────────────")
                     print(f"│ Batch Size: {training_config.batch_size}")
-                    print(f"│ Step:       {i+1}")
+                    print(f"│ Step:       {global_step}")
                     print(f"│ Loss:       {last_loss:.5f}")
                     print(f"│ Perplexity: {last_perplexity:.5f}")
                     print("╰──────────────────────────────────────")
                     running_loss = 0.0
 
-            if global_step % training_config.validation_eval_steps == training_config.validation_eval_steps - 1:
+            if global_step % training_config.validation_eval_steps == 0:
                 val_eval(
                     model=model,
                     writer=writer,
@@ -197,8 +204,8 @@ def train(
                     device=device
                 )
 
-            if dist.get_rank() == 0:
-                if global_step % training_config.sampling_steps == training_config.sampling_steps - 1:
+            if not is_distributed() or dist.get_rank() == 0:
+                if global_step % training_config.sampling_steps == 0:
                     sample_and_log(
                         model=model,
                         global_step=global_step,
@@ -209,26 +216,28 @@ def train(
                         sampling_length=training_config.sampling_length_multiplier * model_config.context_length
                     )
 
-            global_step += 1
+def is_distributed():
+    return 'RANK' in os.environ or 'LOCAL_RANK' in os.environ
 
 if __name__ == '__main__':
-    # default values are for toy model with shakespeare dataset
+    # default values are for tiny model
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-config', type=str, default='config/model_configs/ss_small.json',
+    parser.add_argument('--model-config', type=str, default='config/model_configs/small.json',
                       help='Path to model configuration file')
-    parser.add_argument('--training-config', type=str, default='config/training_configs/ss_small.json',
+    parser.add_argument('--training-config', type=str, default='config/training_configs/small.json',
                       help='Path to training configuration file')
-    parser.add_argument('--dataset', type=str, default='./datasets/tinyshakespeare.txt',
-                      help='Path to training dataset file')
+    parser.add_argument('--dataset', type=str, default='datasets/coqa_stories.txt',
+                      help='Path to training text file')
     args = parser.parse_args()
 
     model_config: ModelConfig = read_model_config(args.model_config)
     training_config: TrainingConfig = read_training_config(args.training_config)
 
-    setup_distributed()
+    if is_distributed():
+        setup_distributed()
 
     writer: SummaryWriter = None
-    if dist.get_rank() == 0:
+    if not is_distributed() or dist.get_rank() == 0:
         writer = SummaryWriter()
 
     full_dataset: TiktokenTxtDataset = TiktokenTxtDataset(
@@ -249,7 +258,8 @@ if __name__ == '__main__':
     )
 
     model = CausalTransformer(model_config=model_config)
-    model = fsdp_wrap(model)
+    if is_distributed():
+        model = fsdp_wrap(model)
 
     device: str
     if training_config.device == "auto":
@@ -264,18 +274,21 @@ if __name__ == '__main__':
         device = training_config.device
 
     dtype = get_supported_dtype(device)
-    # model = model.to(device, dtype=dtype)
+    if not is_distributed():
+        model = model.to(device, dtype=dtype)
 
     opt: optim.AdamW = optim.AdamW(model.parameters(), lr=training_config.learning_rate)
 
     if training_config.compile:
         if device == "mps":
             print("INFO: torch.compile not compatible with device mps, choosing not to compile")
+        elif device == "cuda" and is_distributed():
+            print("INFO: torch.compile not working with multiple GPUs here yet, choosing not to compile")
         else:
             model = torch.compile(model)
 
-    train_sampler = DistributedSampler(train_dataset)
-    val_sampler = DistributedSampler(val_dataset)
+    train_sampler = DistributedSampler(train_dataset) if is_distributed() else RandomSampler(train_dataset)
+    val_sampler = DistributedSampler(val_dataset) if is_distributed() else SequentialSampler(val_dataset)
     train_loader: DataLoader = DataLoader(
         train_dataset,
         batch_size=training_config.batch_size,
@@ -284,11 +297,10 @@ if __name__ == '__main__':
     val_loader: DataLoader = DataLoader(
         val_dataset,
         batch_size=training_config.batch_size,
-        shuffle=False,
         sampler=val_sampler
     )
 
-    if dist.get_rank() == 0:
+    if not is_distributed() or dist.get_rank() == 0:
         trainable_params: int = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print("\n╭─ Training Info ──────────────────────")
         print(f"│ Total dataset size:   {len(full_dataset)}")
@@ -309,7 +321,8 @@ if __name__ == '__main__':
         writer=writer,
     )
 
-    if dist.get_rank() == 0:
+    if not is_distributed() or dist.get_rank() == 0:
         writer.flush()
 
-    cleanup_distributed()
+    if is_distributed():
+        cleanup_distributed()

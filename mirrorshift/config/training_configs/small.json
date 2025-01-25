@@ -1,7 +1,7 @@
 {
   "device": "auto",
   "batch_size": 16,
-  "learning_rate": 5e-3,
+  "learning_rate": 5e-4,
   "lr_warmup_steps": 250,
   "lr_schedule": "wsd_exponential",
   "num_epochs": 1,
@@ -9,6 +9,6 @@
   "reporting_steps": 100,
   "sampling_steps": 500,
   "sampling_length_multiplier": 2,
-  "validation_split": 0.1,
+  "validation_split": 0.001,
   "validation_eval_steps": 500
 }
