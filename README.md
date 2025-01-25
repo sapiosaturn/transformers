@@ -10,6 +10,7 @@ personal repo for transformers code
 - `data.py`: Basic character-level tokenization and dataset handling
 - `utils.py`: Configuration dataclasses and JSON loading
 - `inference.py`: Text generation utilities
+- `distributed.py`: Functions wrapping most of the distributed training related code
 - `config/`: JSON files for model architecture and training parameters
 
 ## Usage
