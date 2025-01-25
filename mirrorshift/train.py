@@ -186,7 +186,7 @@ def train(
                     print(f"│ Loss:       {last_loss:.5f}")
                     print(f"│ Perplexity: {last_perplexity:.5f}")
                     print("╰──────────────────────────────────────")
-                running_loss = 0.0
+                    running_loss = 0.0
 
             if global_step % training_config.validation_eval_steps == training_config.validation_eval_steps - 1:
                 val_eval(
@@ -227,7 +227,7 @@ if __name__ == '__main__':
 
     setup_distributed()
 
-    writer: SummaryWriter
+    writer: SummaryWriter = None
     if dist.get_rank() == 0:
         writer = SummaryWriter()
 
@@ -313,4 +313,3 @@ if __name__ == '__main__':
         writer.flush()
 
     cleanup_distributed()
-
